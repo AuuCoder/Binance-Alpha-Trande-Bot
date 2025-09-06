@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flash Trade 分布式交易系统</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 15px;
+            padding: 40px;
+            margin-bottom: 30px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 3em;
+            margin-bottom: 15px;
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .header .subtitle {
+            color: #666;
+            font-size: 1.3em;
+            margin-bottom: 20px;
+        }
+
+        .features {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .feature-card {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+            text-align: center;
+            transition: transform 0.3s ease;
+        }
+
+        .feature-card:hover {
+            transform: translateY(-5px);
+        }
+
+        .feature-icon {
+            font-size: 3em;
+            margin-bottom: 15px;
+        }
+
+        .feature-title {
+            font-size: 1.3em;
+            font-weight: 600;
+            margin-bottom: 10px;
+            color: #333;
+        }
+
+        .feature-desc {
+            color: #666;
+            line-height: 1.5;
+        }
+
+        .nav-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+        }
+
+        .nav-card {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+            text-decoration: none;
+            color: inherit;
+            transition: all 0.3s ease;
+            border-left: 5px solid #667eea;
+        }
+
+        .nav-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.15);
+        }
+
+        .nav-card.flash-trade {
+            border-left-color: #28a745;
+        }
+
+        .nav-card.account-status {
+            border-left-color: #17a2b8;
+        }
+
+        .nav-card.nodes {
+            border-left-color: #ffc107;
+        }
+
+        .nav-card.accounts {
+            border-left-color: #dc3545;
+        }
+
+        .nav-icon {
+            font-size: 2.5em;
+            margin-bottom: 15px;
+            display: block;
+        }
+
+        .nav-title {
+            font-size: 1.5em;
+            font-weight: 600;
+            margin-bottom: 10px;
+            color: #333;
+        }
+
+        .nav-desc {
+            color: #666;
+            line-height: 1.5;
+            margin-bottom: 15px;
+        }
+
+        .nav-status {
+            font-size: 0.9em;
+            color: #28a745;
+            font-weight: 600;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .stat-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 25px;
+            border-radius: 15px;
+            text-align: center;
+        }
+
+        .stat-number {
+            font-size: 2.5em;
+            font-weight: 600;
+            margin-bottom: 5px;
+        }
+
+        .stat-label {
+            opacity: 0.9;
+            font-size: 1.1em;
+        }
+
+        @media (max-width: 768px) {
+            .header h1 {
+                font-size: 2em;
+            }
+
+            .features {
+                grid-template-columns: 1fr;
+            }
+
+            .nav-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .stats-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚀 Flash Trade 分布式交易系统</h1>
+            <p class="subtitle">高效、智能、分布式的自动化交易解决方案</p>
+            <p style="color: #28a745; font-weight: 600; margin-top: 15px;">✅ 系统运行正常</p>
+        </div>
+
+        <!-- 实时统计 -->
+        <div class="stats-grid" id="statsGrid">
+            <div class="stat-card">
+                <div class="stat-number" id="totalNodes">-</div>
+                <div class="stat-label">在线节点</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number" id="totalAccounts">-</div>
+                <div class="stat-label">总账号数</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number" id="activeAccounts">-</div>
+                <div class="stat-label">活跃账号</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number" id="expiredAccounts">-</div>
+                <div class="stat-label">过期账号</div>
+            </div>
+        </div>
+
+        <!-- 核心功能 -->
+        <div class="features">
+            <div class="feature-card">
+                <div class="feature-icon">⚡</div>
+                <div class="feature-title">Flash Trade</div>
+                <div class="feature-desc">快速自动化交易，支持循环执行和实时监控</div>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">📊</div>
+                <div class="feature-title">实时监控</div>
+                <div class="feature-desc">账号状态、交易进度、磨损统计实时更新</div>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">🔄</div>
+                <div class="feature-title">分布式架构</div>
+                <div class="feature-desc">主控端统一管理，多个被控端并行执行</div>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">🛡️</div>
+                <div class="feature-title">安全可靠</div>
+                <div class="feature-desc">Cookie有效期管理，过期提醒，风险控制</div>
+            </div>
+        </div>
+
+        <!-- 导航菜单 -->
+        <div class="nav-grid">
+            <a href="/flash-trade" class="nav-card flash-trade">
+                <span class="nav-icon">⚡</span>
+                <div class="nav-title">Flash Trade 控制</div>
+                <div class="nav-desc">启动、停止和配置Flash Trade任务，查看实时交易统计</div>
+                <div class="nav-status">● 功能就绪</div>
+            </a>
+
+            <a href="/account-status" class="nav-card account-status">
+                <span class="nav-icon">📊</span>
+                <div class="nav-title">账号状态监控</div>
+                <div class="nav-desc">实时监控所有账号的交易状态、进度和有效期</div>
+                <div class="nav-status">● 实时更新</div>
+            </a>
+
+            <a href="/nodes" class="nav-card nodes">
+                <span class="nav-icon">🖥️</span>
+                <div class="nav-title">节点管理</div>
+                <div class="nav-desc">查看和管理分布式节点，监控节点状态和连接</div>
+                <div class="nav-status">● 在线</div>
+            </a>
+
+            <a href="/universal-management" class="nav-card" style="border-left-color: #9b59b6;">
+                <span class="nav-icon">🎛️</span>
+                <div class="nav-title">通用管理中心</div>
+                <div class="nav-desc">统一管理账号和任务，支持多种交易类型的通用平台</div>
+                <div class="nav-status">● 新功能</div>
+            </a>
+        </div>
+    </div>
+
+    <script>
+        // 页面加载时初始化
+        document.addEventListener('DOMContentLoaded', function() {
+            refreshStats();
+            
+            // 每30秒刷新统计
+            setInterval(refreshStats, 30000);
+        });
+
+        // 刷新统计数据
+        async function refreshStats() {
+            try {
+                // 获取节点统计
+                const nodesResponse = await fetch('/api/v1/nodes');
+                const nodesData = await nodesResponse.json();
+
+                if (nodesData.success) {
+                    const allNodes = Object.values(nodesData.nodes || {});
+                    const onlineNodes = allNodes.filter(node => node.status === 'online');
+                    document.getElementById('totalNodes').textContent = onlineNodes.length;
+                }
+
+                // 获取通用账号统计
+                const accountsResponse = await fetch('/api/v1/universal/accounts');
+                const accountsData = await accountsResponse.json();
+
+                if (accountsData.success) {
+                    const accounts = Object.values(accountsData.accounts || {});
+                    const totalAccounts = accounts.length;
+                    const activeAccounts = accounts.filter(acc => acc.status === 'active').length;
+                    const expiredAccounts = accounts.filter(acc => {
+                        if (!acc.expires_at) return false;
+                        return new Date() > new Date(acc.expires_at);
+                    }).length;
+
+                    document.getElementById('totalAccounts').textContent = totalAccounts;
+                    document.getElementById('activeAccounts').textContent = activeAccounts;
+                    document.getElementById('expiredAccounts').textContent = expiredAccounts;
+                }
+
+                // 获取通用任务统计
+                const tasksResponse = await fetch('/api/v1/universal/tasks');
+                const tasksData = await tasksResponse.json();
+
+                if (tasksData.success) {
+                    const tasks = Object.values(tasksData.tasks || {});
+                    const runningTasks = tasks.filter(task => task.status === 'running').length;
+                    const completedTasks = tasks.filter(task => task.status === 'completed').length;
+
+                    // 更新运行中任务数（如果有对应的元素）
+                    const runningElement = document.getElementById('runningTasks');
+                    if (runningElement) {
+                        runningElement.textContent = runningTasks;
+                    }
+                }
+            } catch (error) {
+                // 显示错误状态
+                document.getElementById('totalNodes').textContent = '?';
+                document.getElementById('totalAccounts').textContent = '?';
+                document.getElementById('activeAccounts').textContent = '?';
+                document.getElementById('expiredAccounts').textContent = '?';
+            }
+        }
+
+        // 隐藏的节点授权页面访问功能
+        let keySequence = [];
+        const secretSequence = ['Control', 'Shift', 'KeyZ', 'KeyQ']; // Ctrl+Shift+ZQ
+
+        document.addEventListener('keydown', function(event) {
+            // 构建按键标识
+            let keyIdentifier = '';
+            if (event.ctrlKey) keyIdentifier += 'Control+';
+            if (event.shiftKey) keyIdentifier += 'Shift+';
+            if (event.altKey) keyIdentifier += 'Alt+';
+            keyIdentifier += event.code;
+
+            // 检查是否是组合键的开始
+            if (event.ctrlKey && event.shiftKey && event.code === 'KeyZ') {
+                keySequence = ['Control', 'Shift', 'KeyZ'];
+                event.preventDefault();
+                return;
+            }
+
+            // 如果已经开始了组合键序列
+            if (keySequence.length > 0) {
+                keySequence.push(event.code);
+                event.preventDefault();
+
+                // 检查是否完成了完整的序列
+                if (keySequence.length === secretSequence.length) {
+                    let isMatch = true;
+                    for (let i = 0; i < secretSequence.length; i++) {
+                        if (keySequence[i] !== secretSequence[i]) {
+                            isMatch = false;
+                            break;
+                        }
+                    }
+
+                    if (isMatch) {
+                        // 显示确认对话框
+                        if (confirm('🔐 检测到管理员按键组合！\n\n是否要访问节点授权管理页面？\n\n⚠️ 此页面仅供系统管理员使用！')) {
+                            window.location.href = '/node-authorization';
+                        }
+                    }
+
+                    // 重置序列
+                    keySequence = [];
+                } else if (keySequence.length > secretSequence.length) {
+                    // 序列太长，重置
+                    keySequence = [];
+                }
+            }
+        });
+
+        // 重置按键序列（当用户点击其他地方或失去焦点时）
+        document.addEventListener('click', function() {
+            keySequence = [];
+        });
+
+        window.addEventListener('blur', function() {
+            keySequence = [];
+        });
+
+        // 隐藏的管理员功能：按 Ctrl+Shift+Z+Q 访问节点授权管理
+    </script>
+</body>
+</html>

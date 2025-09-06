@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>自动卖出结果 - Alpha AutoSell Bot</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        .result-card {
+            border-left: 4px solid #007bff;
+            margin-bottom: 15px;
+        }
+        .result-success {
+            border-left-color: #28a745;
+        }
+        .result-failed {
+            border-left-color: #dc3545;
+        }
+        .stats-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        .filter-section {
+            background-color: #f8f9fa;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+        <div class="container">
+            <a class="navbar-brand" href="/">
+                <i class="fas fa-robot"></i> Alpha AutoSell Bot
+            </a>
+            <div class="navbar-nav ms-auto">
+                <a class="nav-link" href="/">首页</a>
+                <a class="nav-link" href="/tasks">任务管理</a>
+                <a class="nav-link active" href="/auto-sell-results">自动卖出结果</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container mt-4">
+        <div class="row">
+            <div class="col-12">
+                <h2><i class="fas fa-chart-line"></i> 自动卖出结果</h2>
+                <p class="text-muted">查看各个节点的自动卖出执行结果</p>
+            </div>
+        </div>
+
+        <!-- 统计信息 -->
+        <div class="row mb-4">
+            <div class="col-md-3">
+                <div class="card stats-card">
+                    <div class="card-body text-center">
+                        <h3 id="totalResults">-</h3>
+                        <p class="mb-0">总执行次数</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card bg-success text-white">
+                    <div class="card-body text-center">
+                        <h3 id="successCount">-</h3>
+                        <p class="mb-0">成功次数</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card bg-danger text-white">
+                    <div class="card-body text-center">
+                        <h3 id="failedCount">-</h3>
+                        <p class="mb-0">失败次数</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card bg-warning text-white">
+                    <div class="card-body text-center">
+                        <h3 id="totalUsdt">-</h3>
+                        <p class="mb-0">总获得USDT</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 过滤器 -->
+        <div class="filter-section">
+            <div class="row">
+                <div class="col-md-3">
+                    <label for="nodeFilter" class="form-label">节点筛选</label>
+                    <select class="form-select" id="nodeFilter">
+                        <option value="">所有节点</option>
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label for="accountFilter" class="form-label">账号筛选</label>
+                    <select class="form-select" id="accountFilter">
+                        <option value="">所有账号</option>
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label for="limitFilter" class="form-label">显示数量</label>
+                    <select class="form-select" id="limitFilter">
+                        <option value="50">50条</option>
+                        <option value="100">100条</option>
+                        <option value="200">200条</option>
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">&nbsp;</label>
+                    <div>
+                        <button class="btn btn-primary" onclick="loadResults()">
+                            <i class="fas fa-search"></i> 查询
+                        </button>
+                        <button class="btn btn-secondary" onclick="autoRefresh()">
+                            <i class="fas fa-sync-alt"></i> 自动刷新
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 结果列表 -->
+        <div class="row">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0">执行结果</h5>
+                        <small class="text-muted" id="lastUpdate">-</small>
+                    </div>
+                    <div class="card-body">
+                        <div id="resultsContainer">
+                            <div class="text-center py-4">
+                                <div class="spinner-border" role="status">
+                                    <span class="visually-hidden">加载中...</span>
+                                </div>
+                                <p class="mt-2">正在加载数据...</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        let autoRefreshInterval = null;
+
+        // 页面加载时初始化
+        document.addEventListener('DOMContentLoaded', function() {
+            loadResults();
+        });
+
+        // 加载自动卖出结果
+        async function loadResults() {
+            try {
+                const nodeId = document.getElementById('nodeFilter').value;
+                const accountId = document.getElementById('accountFilter').value;
+                const limit = document.getElementById('limitFilter').value;
+
+                const params = new URLSearchParams();
+                if (nodeId) params.append('node_id', nodeId);
+                if (accountId) params.append('account_id', accountId);
+                params.append('limit', limit);
+
+                const response = await fetch(`/api/v1/auto-sell/results?${params}`);
+                const data = await response.json();
+
+                if (data.success) {
+                    updateStats(data.data.stats);
+                    updateResults(data.data.results);
+                    updateFilters(data.data.results);
+                    document.getElementById('lastUpdate').textContent = `最后更新: ${new Date().toLocaleString()}`;
+                } else {
+                    showError('加载数据失败');
+                }
+            } catch (error) {
+                console.error('加载结果失败:', error);
+                showError('网络错误，请稍后重试');
+            }
+        }
+
+        // 更新统计信息
+        function updateStats(stats) {
+            document.getElementById('totalResults').textContent = stats.total_results || 0;
+            document.getElementById('successCount').textContent = stats.success_count || 0;
+            document.getElementById('failedCount').textContent = stats.failed_count || 0;
+            document.getElementById('totalUsdt').textContent = (stats.total_usdt || 0).toFixed(6);
+        }
+
+        // 更新结果列表
+        function updateResults(results) {
+            const container = document.getElementById('resultsContainer');
+            
+            if (!results || results.length === 0) {
+                container.innerHTML = `
+                    <div class="text-center py-4">
+                        <i class="fas fa-inbox fa-3x text-muted mb-3"></i>
+                        <p class="text-muted">暂无自动卖出结果</p>
+                    </div>
+                `;
+                return;
+            }
+
+            let html = '';
+            results.forEach(result => {
+                html += createResultCard(result);
+            });
+            container.innerHTML = html;
+        }
+
+        // 创建结果卡片
+        function createResultCard(result) {
+            const results = result.results || {};
+            const status = results.status || 'unknown';
+            const isSuccess = status === 'completed';
+            const cardClass = isSuccess ? 'result-success' : 'result-failed';
+            const statusIcon = isSuccess ? 'fas fa-check-circle text-success' : 'fas fa-times-circle text-danger';
+            const statusText = isSuccess ? '成功' : '失败';
+
+            const timestamp = new Date((result.timestamp || 0) * 1000).toLocaleString();
+            const orderID = results.order_id || '-';
+            const usdtAmount = results.actual_usdt_amount || 0;
+            const gasFee = results.chain_gas_fee || 0;
+            const tokenSymbol = results.token_symbol || '-';
+            const soldAmount = results.sold_amount || 0;
+            const errorMsg = results.sell_error || results.order_error || '';
+
+            return `
+                <div class="card result-card ${cardClass} mb-3">
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col-md-8">
+                                <h6 class="card-title">
+                                    <i class="${statusIcon}"></i>
+                                    ${result.account_id} - ${statusText}
+                                </h6>
+                                <p class="card-text">
+                                    <strong>节点:</strong> ${result.node_id}<br>
+                                    <strong>时间:</strong> ${timestamp}<br>
+                                    <strong>代币:</strong> ${tokenSymbol} (${soldAmount})<br>
+                                    ${isSuccess ? `<strong>订单ID:</strong> ${orderID}` : `<strong>错误:</strong> ${errorMsg}`}
+                                </p>
+                            </div>
+                            <div class="col-md-4 text-end">
+                                ${isSuccess ? `
+                                    <h4 class="text-success">+${usdtAmount.toFixed(6)} USDT</h4>
+                                    <small class="text-muted">手续费: ${gasFee.toFixed(6)} USDT</small>
+                                ` : `
+                                    <h4 class="text-danger">失败</h4>
+                                    <small class="text-muted">未获得收益</small>
+                                `}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        // 更新过滤器选项
+        function updateFilters(results) {
+            const nodeFilter = document.getElementById('nodeFilter');
+            const accountFilter = document.getElementById('accountFilter');
+            
+            const nodes = new Set();
+            const accounts = new Set();
+            
+            results.forEach(result => {
+                if (result.node_id) nodes.add(result.node_id);
+                if (result.account_id) accounts.add(result.account_id);
+            });
+            
+            // 更新节点选项
+            const currentNode = nodeFilter.value;
+            nodeFilter.innerHTML = '<option value="">所有节点</option>';
+            nodes.forEach(node => {
+                const option = document.createElement('option');
+                option.value = node;
+                option.textContent = node;
+                if (node === currentNode) option.selected = true;
+                nodeFilter.appendChild(option);
+            });
+            
+            // 更新账号选项
+            const currentAccount = accountFilter.value;
+            accountFilter.innerHTML = '<option value="">所有账号</option>';
+            accounts.forEach(account => {
+                const option = document.createElement('option');
+                option.value = account;
+                option.textContent = account;
+                if (account === currentAccount) option.selected = true;
+                accountFilter.appendChild(option);
+            });
+        }
+
+        // 自动刷新
+        function autoRefresh() {
+            if (autoRefreshInterval) {
+                clearInterval(autoRefreshInterval);
+                autoRefreshInterval = null;
+                document.querySelector('[onclick="autoRefresh()"]').innerHTML = '<i class="fas fa-sync-alt"></i> 自动刷新';
+            } else {
+                autoRefreshInterval = setInterval(loadResults, 5000); // 每5秒刷新
+                document.querySelector('[onclick="autoRefresh()"]').innerHTML = '<i class="fas fa-stop"></i> 停止刷新';
+                document.querySelector('[onclick="autoRefresh()"]').classList.add('btn-warning');
+                document.querySelector('[onclick="autoRefresh()"]').classList.remove('btn-secondary');
+            }
+        }
+
+        // 显示错误信息
+        function showError(message) {
+            document.getElementById('resultsContainer').innerHTML = `
+                <div class="alert alert-danger" role="alert">
+                    <i class="fas fa-exclamation-triangle"></i> ${message}
+                </div>
+            `;
+        }
+    </script>
+</body>
+</html>

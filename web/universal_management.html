@@ -1,0 +1,1557 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>通用管理中心</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            color: #333;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .nav {
+            display: flex;
+            justify-content: center;
+            margin-bottom: 30px;
+            gap: 10px;
+        }
+
+        .nav-btn {
+            padding: 10px 20px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        .nav-btn:hover {
+            background: #5a6fd8;
+            transform: translateY(-2px);
+        }
+
+        .tabs {
+            display: flex;
+            margin-bottom: 30px;
+            border-bottom: 2px solid #e1e5e9;
+        }
+
+        .tab {
+            padding: 15px 30px;
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 600;
+            color: #666;
+            border-bottom: 3px solid transparent;
+            transition: all 0.3s ease;
+        }
+
+        .tab.active {
+            color: #667eea;
+            border-bottom-color: #667eea;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .section {
+            background: white;
+            border-radius: 10px;
+            padding: 25px;
+            margin-bottom: 20px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.08);
+        }
+
+        .section h2 {
+            margin-bottom: 20px;
+            color: #333;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 10px;
+        }
+
+        .form-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .form-group label {
+            margin-bottom: 5px;
+            font-weight: 600;
+            color: #555;
+        }
+
+        .form-group input,
+        .form-group select,
+        .form-group textarea {
+            padding: 10px;
+            border: 2px solid #e1e5e9;
+            border-radius: 6px;
+            font-size: 14px;
+            transition: border-color 0.3s ease;
+        }
+
+        .form-group input:focus,
+        .form-group select:focus,
+        .form-group textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .btn {
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            margin-right: 10px;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-danger {
+            background: linear-gradient(45deg, #e74c3c, #c0392b);
+        }
+
+        .btn-success {
+            background: linear-gradient(45deg, #27ae60, #2ecc71);
+        }
+
+        .btn-sm {
+            padding: 6px 12px;
+            font-size: 12px;
+            margin-right: 5px;
+        }
+
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+
+        .data-table th,
+        .data-table td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #e1e5e9;
+        }
+
+        .data-table th {
+            background: #f8f9fa;
+            font-weight: 600;
+            color: #555;
+        }
+
+        .data-table tr:hover {
+            background: #f8f9fa;
+        }
+
+        .status-badge {
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .status-active {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .status-inactive {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .status-expired {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .status-running {
+            background: #d1ecf1;
+            color: #0c5460;
+        }
+
+        .status-completed {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .status-failed {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .status-pending {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .status-cancelled {
+            background: #e2e3e5;
+            color: #383d41;
+        }
+
+        /* 自动卖出任务特殊样式 */
+        .btn-warning {
+            background: #ffc107;
+            color: #212529;
+        }
+
+        .btn-warning:hover {
+            background: #e0a800;
+        }
+
+        .auto-sell-indicator {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            background: #28a745;
+            border-radius: 50%;
+            margin-right: 5px;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .stat-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+        }
+
+        .stat-number {
+            font-size: 2em;
+            font-weight: 600;
+            margin-bottom: 5px;
+        }
+
+        .stat-label {
+            opacity: 0.9;
+        }
+
+        .message {
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            display: none;
+        }
+
+        .message.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .message.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+        @media (max-width: 768px) {
+            .form-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .stats-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+
+            .tabs {
+                flex-wrap: wrap;
+            }
+
+            .tab {
+                flex: 1;
+                min-width: 120px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎛️ 通用管理中心</h1>
+            <p>统一管理账号和任务，支持多种交易类型</p>
+        </div>
+
+        <div class="nav">
+            <a href="/" class="nav-btn">🏠 首页</a>
+            <a href="/nodes" class="nav-btn">🖥️ 节点管理</a>
+            <a href="/flash-trade" class="nav-btn">⚡ Flash Trade</a>
+            <a href="/account-status" class="nav-btn">📊 状态监控</a>
+            <a href="/universal-management" class="nav-btn">🎛️ 通用管理</a>
+        </div>
+
+        <div id="message" class="message"></div>
+
+        <!-- 统计概览 -->
+        <div class="stats-grid" id="statsGrid">
+            <!-- 统计卡片将通过JavaScript动态生成 -->
+        </div>
+
+        <!-- 标签页 -->
+        <div class="tabs">
+            <button class="tab active" onclick="switchTab('accounts')">👥 账号管理</button>
+            <button class="tab" onclick="switchTab('tasks')">📋 任务管理</button>
+            <button class="tab" onclick="switchTab('expiry')">⏰ 过期管理</button>
+        </div>
+
+        <!-- 账号管理 -->
+        <div id="accounts-tab" class="tab-content active">
+            <div class="section">
+                <h2>添加新账号</h2>
+                <form id="accountForm">
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label for="accountId">账号ID *</label>
+                            <input type="text" id="accountId" name="id" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="accountName">账号名称</label>
+                            <input type="text" id="accountName" name="name">
+                        </div>
+                        <div class="form-group">
+                            <label for="csrftoken">CSRF Token *</label>
+                            <input type="text" id="csrftoken" name="csrftoken" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="cookie">Cookie *</label>
+                            <textarea id="cookie" name="cookie" rows="3" required></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label for="assignedNode">分配节点</label>
+                            <select id="assignedNode" name="assigned_node">
+                                <option value="">自动分配</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="description">描述</label>
+                            <textarea id="description" name="description" rows="2"></textarea>
+                        </div>
+                    </div>
+                    <button type="submit" class="btn">➕ 添加账号</button>
+                </form>
+            </div>
+
+            <div class="section">
+                <h2>账号列表
+                    <button class="btn btn-sm" onclick="loadAccounts()" style="margin-left: 10px;">🔄 刷新</button>
+                </h2>
+                <table class="data-table" id="accountsTable">
+                    <thead>
+                        <tr>
+                            <th>账号ID</th>
+                            <th>名称</th>
+                            <th>状态</th>
+                            <th>分配节点</th>
+                            <th>过期时间</th>
+                            <th>使用次数</th>
+                            <th>成功率</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <!-- 账号数据将通过JavaScript动态生成 -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- 任务管理 -->
+        <div id="tasks-tab" class="tab-content">
+            <div class="section">
+                <h2>创建新任务</h2>
+                <form id="taskForm">
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label for="taskName">任务名称 *</label>
+                            <input type="text" id="taskName" name="name" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="taskType">任务类型 *</label>
+                            <select id="taskType" name="type" required>
+                                <option value="">选择任务类型</option>
+                                <option value="flash_trade">Flash Trade</option>
+                                <option value="auto_sell">自动卖出</option>
+                                <option value="bulk_trade">批量交易</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="taskPriority">优先级</label>
+                            <select id="taskPriority" name="priority">
+                                <option value="5">普通 (5)</option>
+                                <option value="7">高 (7)</option>
+                                <option value="9">紧急 (9)</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="targetAccounts">目标账号</label>
+                            <select id="targetAccounts" name="target_accounts" multiple>
+                                <!-- 账号选项将通过JavaScript动态生成 -->
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="taskDescription">任务描述</label>
+                            <textarea id="taskDescription" name="description" rows="2"></textarea>
+                        </div>
+                    </div>
+                    
+                    <!-- 任务参数区域 -->
+                    <div id="taskParameters">
+                        <!-- 参数表单将根据任务类型动态生成 -->
+                    </div>
+                    
+                    <button type="submit" class="btn">🚀 创建任务</button>
+                </form>
+            </div>
+
+            <div class="section">
+                <h2>任务列表</h2>
+                <table class="data-table" id="tasksTable">
+                    <thead>
+                        <tr>
+                            <th>任务ID</th>
+                            <th>名称</th>
+                            <th>类型</th>
+                            <th>状态</th>
+                            <th>进度</th>
+                            <th>创建时间</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <!-- 任务数据将通过JavaScript动态生成 -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- 过期管理 -->
+        <div id="expiry-tab" class="tab-content">
+            <div class="section">
+                <h2>账号过期监控</h2>
+                <div id="expiryInfo">
+                    <!-- 过期信息将通过JavaScript动态生成 -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 页面加载时初始化
+        document.addEventListener('DOMContentLoaded', function() {
+            loadStats();
+            loadAccounts();
+            loadTasks();
+            loadNodes();
+            loadExpiryInfo();
+            updateNodeSelects(); // 加载节点选择列表
+
+            // 设置定时刷新
+            setInterval(loadStats, 30000);
+            setInterval(loadAccounts, 60000);
+            setInterval(loadTasks, 30000);
+            setInterval(updateNodeSelects, 60000); // 定期更新节点列表
+        });
+
+        // 切换标签页
+        function switchTab(tabName) {
+            // 隐藏所有标签内容
+            document.querySelectorAll('.tab-content').forEach(content => {
+                content.classList.remove('active');
+            });
+
+            // 移除所有标签的活跃状态
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+
+            // 显示选中的标签内容
+            document.getElementById(tabName + '-tab').classList.add('active');
+
+            // 设置选中的标签为活跃状态
+            event.target.classList.add('active');
+        }
+
+        // 加载统计数据
+        async function loadStats() {
+            try {
+                const [accountsRes, tasksRes] = await Promise.all([
+                    fetch('/api/v1/universal/accounts'),
+                    fetch('/api/v1/universal/tasks')
+                ]);
+
+                const accountsData = await accountsRes.json();
+                const tasksData = await tasksRes.json();
+
+                const accounts = accountsData.accounts || {};
+                const tasks = tasksData.tasks || {};
+
+                // 计算统计数据
+                const totalAccounts = Object.keys(accounts).length;
+                const activeAccounts = Object.values(accounts).filter(acc => acc.status === 'active').length;
+                const totalTasks = Object.keys(tasks).length;
+                const runningTasks = Object.values(tasks).filter(task => task.status === 'running').length;
+
+                // 更新统计显示
+                const statsGrid = document.getElementById('statsGrid');
+                statsGrid.innerHTML = `
+                    <div class="stat-card">
+                        <div class="stat-number">${totalAccounts}</div>
+                        <div class="stat-label">总账号数</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-number">${activeAccounts}</div>
+                        <div class="stat-label">活跃账号</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-number">${totalTasks}</div>
+                        <div class="stat-label">总任务数</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-number">${runningTasks}</div>
+                        <div class="stat-label">运行中任务</div>
+                    </div>
+                `;
+            } catch (error) {
+                // 静默处理错误
+            }
+        }
+
+        // 加载账号列表
+        async function loadAccounts() {
+            try {
+                // 添加时间戳和随机数防止缓存
+                const timestamp = new Date().getTime();
+                const random = Math.random().toString(36).substring(7);
+                const response = await fetch(`/api/v1/universal/accounts?t=${timestamp}&r=${random}`, {
+                    cache: 'no-cache',
+                    headers: {
+                        'Cache-Control': 'no-cache',
+                        'Pragma': 'no-cache'
+                    }
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    displayAccounts(data.accounts || {});
+                    updateAccountSelects(data.accounts || {});
+                }
+            } catch (error) {
+                // 静默处理错误
+            }
+        }
+
+        // 更新节点选择下拉框
+        async function updateNodeSelects() {
+            try {
+                // 获取已授权的节点
+                const response = await fetch('/api/v1/nodes/authorized');
+                const data = await response.json();
+
+                const nodeSelect = document.getElementById('assignedNode');
+                if (!nodeSelect) return;
+
+                // 保存当前选中的值
+                const currentValue = nodeSelect.value;
+
+                // 清空选项
+                nodeSelect.innerHTML = '<option value="">自动分配</option>';
+
+                // 添加已授权的节点选项
+                if (data.success && data.nodes) {
+                    data.nodes.forEach(node => {
+                        const option = document.createElement('option');
+                        option.value = node.node_id;
+                        const statusText = node.status === 'online' ? '在线' : '离线';
+                        option.textContent = `${node.friendly_name || node.node_id} (${statusText})`;
+                        // 如果节点离线，添加样式提示
+                        if (node.status !== 'online') {
+                            option.style.color = '#999';
+                        }
+                        nodeSelect.appendChild(option);
+                    });
+                }
+
+                // 恢复选中的值
+                nodeSelect.value = currentValue;
+            } catch (error) {
+                // 静默处理错误
+            }
+        }
+
+        // 显示账号列表
+        function displayAccounts(accounts) {
+            const tbody = document.querySelector('#accountsTable tbody');
+            tbody.innerHTML = '';
+
+            Object.values(accounts).forEach(account => {
+
+                const row = document.createElement('tr');
+
+                const statusClass = `status-${account.status}`;
+                const expiryDate = new Date(account.expires_at).toLocaleString();
+                const successRate = account.success_rate ? account.success_rate.toFixed(1) + '%' : '0%';
+
+                row.innerHTML = `
+                    <td>${account.id}</td>
+                    <td>${account.name || account.id}</td>
+                    <td><span class="status-badge ${statusClass}">${account.status}</span></td>
+                    <td>${account.assigned_node || '未分配'}</td>
+                    <td>${expiryDate}</td>
+                    <td>${account.total_usage || 0}</td>
+                    <td>${successRate}</td>
+                    <td>
+                        <button class="btn btn-sm" onclick="editAccount('${account.id}')">✏️ 编辑</button>
+                        <button class="btn btn-sm btn-danger" onclick="deleteAccount('${account.id}')">🗑️ 删除</button>
+                    </td>
+                `;
+
+                tbody.appendChild(row);
+            });
+        }
+
+        // 更新账号选择框
+        function updateAccountSelects(accounts) {
+            const select = document.getElementById('targetAccounts');
+            select.innerHTML = '<option value="">所有账号</option>';
+
+            Object.values(accounts).forEach(account => {
+                if (account.status === 'active') {
+                    const option = document.createElement('option');
+                    option.value = account.id;
+                    option.textContent = `${account.name || account.id} (${account.id})`;
+                    select.appendChild(option);
+                }
+            });
+        }
+
+        // 加载任务列表
+        async function loadTasks() {
+            try {
+                const response = await fetch('/api/v1/universal/tasks');
+                const data = await response.json();
+
+                if (data.success) {
+                    displayTasks(data.tasks || {});
+                }
+            } catch (error) {
+                // 静默处理错误
+            }
+        }
+
+        // 显示任务列表
+        function displayTasks(tasks) {
+            const tbody = document.querySelector('#tasksTable tbody');
+            tbody.innerHTML = '';
+
+            Object.values(tasks).forEach(task => {
+                const row = document.createElement('tr');
+
+                const statusClass = `status-${task.status}`;
+                const createdDate = new Date(task.created_at).toLocaleString();
+                const progress = task.progress ? task.progress.percentage.toFixed(1) + '%' : '0%';
+
+                // 为自动卖出任务生成特殊的名称显示
+                let taskName = task.name;
+                if (task.type === 'auto_sell' && task.parameters) {
+                    const symbol = getTokenSymbolFromResults(task);
+                    const amount = task.parameters.monitor_amount;
+                    if (symbol) {
+                        taskName += ` (${symbol} >= ${amount})`;
+                    } else {
+                        taskName += ` (监控数量: ${amount})`;
+                    }
+                }
+
+                row.innerHTML = `
+                    <td>${task.id}</td>
+                    <td>${taskName}</td>
+                    <td>${getTaskTypeDisplay(task.type)}</td>
+                    <td><span class="status-badge ${statusClass}">${getStatusDisplay(task.status)}</span></td>
+                    <td>${progress}</td>
+                    <td>${createdDate}</td>
+                    <td>
+                        ${task.status === 'pending' ? `<button class="btn btn-sm btn-success" onclick="startTask('${task.id}')">启动</button>` : ''}
+                        <button class="btn btn-sm" onclick="viewTask('${task.id}')">查看</button>
+                        ${task.type === 'auto_sell' && task.status === 'running' ? `<button class="btn btn-sm btn-warning" onclick="viewAutoSellStatus('${task.id}')">监控状态</button>` : ''}
+                    </td>
+                `;
+
+                tbody.appendChild(row);
+            });
+        }
+
+        // 加载节点列表
+        async function loadNodes() {
+            try {
+                const response = await fetch('/api/v1/nodes');
+                const data = await response.json();
+
+                if (data.success) {
+                    const select = document.getElementById('assignedNode');
+                    select.innerHTML = '<option value="">自动分配</option>';
+
+                    Object.entries(data.nodes || {}).forEach(([nodeId, node]) => {
+                        if (node.status === 'online') {
+                            const option = document.createElement('option');
+                            option.value = nodeId;
+                            option.textContent = `${node.friendly_name || nodeId} (${nodeId})`;
+                            select.appendChild(option);
+                        }
+                    });
+                }
+            } catch (error) {
+                // 静默处理错误
+            }
+        }
+
+        // 加载过期信息
+        async function loadExpiryInfo() {
+            try {
+                const response = await fetch('/api/v1/universal/accounts/expiry');
+                const data = await response.json();
+
+                if (data.success) {
+                    displayExpiryInfo(data);
+                }
+            } catch (error) {
+                // 静默处理错误
+            }
+        }
+
+        // 显示过期信息
+        function displayExpiryInfo(data) {
+            const container = document.getElementById('expiryInfo');
+
+            // 使用新的 API 格式
+            const summary = data.summary || {};
+            const accounts = data.accounts || {};
+            const expired = accounts.expired || [];
+            const nearExpiry = accounts.near_expiry || [];
+            const active = accounts.active || [];
+
+            container.innerHTML = `
+                <div class="stats-grid">
+                    <div class="stat-card" style="background: linear-gradient(135deg, #27ae60 0%, #2ecc71 100%);">
+                        <div class="stat-number">${summary.active_count || 0}</div>
+                        <div class="stat-label">未过期账号</div>
+                    </div>
+                    <div class="stat-card" style="background: linear-gradient(135deg, #f39c12 0%, #e67e22 100%);">
+                        <div class="stat-number">${summary.near_expiry_count || 0}</div>
+                        <div class="stat-label">即将过期账号</div>
+                    </div>
+                    <div class="stat-card" style="background: linear-gradient(135deg, #e74c3c 0%, #c0392b 100%);">
+                        <div class="stat-number">${summary.expired_count || 0}</div>
+                        <div class="stat-label">已过期账号</div>
+                    </div>
+                    <div class="stat-card" style="background: linear-gradient(135deg, #3498db 0%, #2980b9 100%);">
+                        <div class="stat-number">${summary.total_accounts || 0}</div>
+                        <div class="stat-label">总账号数</div>
+                    </div>
+                </div>
+
+                ${active.length > 0 ? `
+                    <h3 style="color: #27ae60; margin: 20px 0 10px 0;">✅ 未过期账号</h3>
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>账号ID</th>
+                                <th>绑定用户</th>
+                                <th>分配节点</th>
+                                <th>状态</th>
+                                <th>过期时间</th>
+                                <th>剩余天数</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${active.map(account => {
+                                const remainingDays = account.remaining_days;
+                                const remainingText = remainingDays === -1 ? '永不过期' :
+                                    remainingDays > 1 ? `${Math.floor(remainingDays)} 天` :
+                                    `${Math.floor(account.remaining_hours)} 小时`;
+                                const statusColor = remainingDays > 7 ? '#27ae60' : remainingDays > 3 ? '#f39c12' : '#e67e22';
+
+                                return `
+                                    <tr>
+                                        <td>${account.account_id}</td>
+                                        <td><strong>${account.name || account.account_id}</strong></td>
+                                        <td>${account.assigned_node || '未分配'}</td>
+                                        <td><span style="color: ${statusColor};">${account.status_desc}</span></td>
+                                        <td>${account.expires_at}</td>
+                                        <td style="color: ${statusColor};">${remainingText}</td>
+                                        <td>
+                                            <button class="btn btn-sm" onclick="editAccount('${account.account_id}')">✏️ 编辑</button>
+                                            <button class="btn btn-sm" onclick="renewAccount('${account.account_id}')">🔄 续期</button>
+                                        </td>
+                                    </tr>
+                                `;
+                            }).join('')}
+                        </tbody>
+                    </table>
+                ` : ''}
+
+                ${expired.length > 0 ? `
+                    <h3 style="color: #e74c3c; margin: 20px 0 10px 0;">⚠️ 已过期账号</h3>
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>账号ID</th>
+                                <th>绑定用户</th>
+                                <th>分配节点</th>
+                                <th>过期时间</th>
+                                <th>过期天数</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${expired.map(account => {
+                                const expiredDays = Math.abs(Math.floor(account.remaining_days));
+                                return `
+                                    <tr style="background-color: #fdf2f2;">
+                                        <td>${account.account_id}</td>
+                                        <td><strong>${account.name || account.account_id}</strong></td>
+                                        <td>${account.assigned_node || '未分配'}</td>
+                                        <td>${account.expires_at}</td>
+                                        <td style="color: #e74c3c;">已过期 ${expiredDays} 天</td>
+                                        <td>
+                                            <button class="btn btn-sm" onclick="renewAccount('${account.account_id}')">🔄 续期</button>
+                                            <button class="btn btn-sm btn-danger" onclick="deleteAccount('${account.account_id}')">🗑️ 删除</button>
+                                        </td>
+                                    </tr>
+                                `;
+                            }).join('')}
+                        </tbody>
+                    </table>
+                ` : ''}
+
+                ${nearExpiry.length > 0 ? `
+                    <h3 style="color: #f39c12; margin: 20px 0 10px 0;">⏰ 即将过期账号 (1天内)</h3>
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>账号ID</th>
+                                <th>绑定用户</th>
+                                <th>分配节点</th>
+                                <th>过期时间</th>
+                                <th>剩余时间</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${nearExpiry.map(account => {
+                                const remainingHours = Math.max(0, account.remaining_hours);
+                                const timeText = remainingHours > 1 ? `${remainingHours.toFixed(1)} 小时` : `${(remainingHours * 60).toFixed(0)} 分钟`;
+                                return `
+                                    <tr style="background-color: #fefbf3;">
+                                        <td>${account.account_id}</td>
+                                        <td><strong>${account.name || account.account_id}</strong></td>
+                                        <td>${account.assigned_node || '未分配'}</td>
+                                        <td>${account.expires_at}</td>
+                                        <td style="color: #f39c12; font-weight: bold;">${timeText}</td>
+                                        <td>
+                                            <button class="btn btn-sm" onclick="renewAccount('${account.account_id}')">🔄 续期</button>
+                                            <button class="btn btn-sm" onclick="editAccount('${account.account_id}')">✏️ 编辑</button>
+                                        </td>
+                                    </tr>
+                                `;
+                            }).join('')}
+                        </tbody>
+                    </table>
+                ` : ''}
+            `;
+        }
+
+        // ===== 账号管理功能 =====
+
+        // 提交账号表单
+        document.getElementById('accountForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+
+            const formData = new FormData(e.target);
+            const accountData = {
+                id: formData.get('id'),
+                name: formData.get('name'),
+                csrftoken: formData.get('csrftoken'),
+                cookie: formData.get('cookie'),
+                assigned_node: formData.get('assigned_node'),
+                description: formData.get('description')
+            };
+
+            try {
+                const response = await fetch('/api/v1/universal/accounts', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(accountData)
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    showMessage('账号创建成功！', 'success');
+                    e.target.reset();
+                    loadAccounts();
+                    loadStats();
+                } else {
+                    showMessage('创建账号失败: ' + data.message, 'error');
+                }
+            } catch (error) {
+                showMessage('创建账号时发生错误: ' + error.message, 'error');
+            }
+        });
+
+        // 编辑账号
+        async function editAccount(accountId) {
+            try {
+                const response = await fetch(`/api/v1/universal/accounts`);
+                const data = await response.json();
+
+                if (data.success && data.accounts[accountId]) {
+                    const account = data.accounts[accountId];
+
+                    // 填充表单
+                    document.getElementById('accountId').value = account.id;
+                    document.getElementById('accountName').value = account.name || '';
+                    document.getElementById('csrftoken').value = account.csrftoken || '';
+                    document.getElementById('cookie').value = account.cookie || '';
+                    document.getElementById('assignedNode').value = account.assigned_node || '';
+                    document.getElementById('description').value = account.description || '';
+
+                    // 编辑模式下禁用账号ID字段
+                    document.getElementById('accountId').disabled = true;
+
+                    // 修改表单提交行为为更新
+                    const form = document.getElementById('accountForm');
+                    const submitBtn = form.querySelector('button[type="submit"]');
+                    submitBtn.textContent = '🔄 更新账号';
+                    submitBtn.onclick = function(e) {
+                        e.preventDefault();
+                        updateAccount(accountId);
+                    };
+
+                    // 滚动到表单
+                    form.scrollIntoView({ behavior: 'smooth' });
+                } else {
+                    showMessage('获取账号信息失败', 'error');
+                }
+            } catch (error) {
+                showMessage('获取账号信息时发生错误: ' + error.message, 'error');
+            }
+        }
+
+        // 更新账号
+        async function updateAccount(accountId) {
+            const formData = new FormData(document.getElementById('accountForm'));
+            const updateData = {
+                name: formData.get('name'),
+                csrftoken: formData.get('csrftoken'),
+                cookie: formData.get('cookie'),
+                assigned_node: formData.get('assigned_node'),
+                description: formData.get('description')
+            };
+
+
+
+            try {
+                const response = await fetch(`/api/v1/universal/accounts/${accountId}`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(updateData)
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    showMessage('账号更新成功！', 'success');
+                    resetAccountForm();
+
+                    // 强制刷新账号列表（多次刷新确保数据更新）
+                    const forceRefresh = async () => {
+                        await loadAccounts();
+                        await loadStats();
+                    };
+
+                    // 立即刷新
+                    forceRefresh();
+
+                    // 延迟刷新多次确保数据同步
+                    setTimeout(forceRefresh, 500);
+                    setTimeout(forceRefresh, 1200);
+                    setTimeout(forceRefresh, 2000);
+                } else {
+                    showMessage('更新账号失败: ' + data.message, 'error');
+                }
+            } catch (error) {
+                showMessage('更新账号时发生错误: ' + error.message, 'error');
+            }
+        }
+
+        // 删除账号
+        async function deleteAccount(accountId) {
+            if (!confirm('确定要删除这个账号吗？此操作不可恢复。')) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/v1/universal/accounts/${accountId}`, {
+                    method: 'DELETE'
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    showMessage('账号删除成功！', 'success');
+                    loadAccounts();
+                    loadStats();
+                } else {
+                    showMessage('删除账号失败: ' + data.message, 'error');
+                }
+            } catch (error) {
+                showMessage('删除账号时发生错误: ' + error.message, 'error');
+            }
+        }
+
+        // 续期账号
+        async function renewAccount(accountId) {
+            try {
+                const response = await fetch(`/api/v1/universal/accounts/${accountId}`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        // 通过更新 cookie 来触发续期
+                        cookie: 'renewed'
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    showMessage('账号续期成功！', 'success');
+                    loadExpiryInfo();
+                    loadAccounts();
+                } else {
+                    showMessage('续期失败: ' + data.message, 'error');
+                }
+            } catch (error) {
+                showMessage('续期时发生错误: ' + error.message, 'error');
+            }
+        }
+
+        // 重置账号表单
+        function resetAccountForm() {
+            const form = document.getElementById('accountForm');
+            form.reset();
+
+            // 重新启用账号ID字段
+            document.getElementById('accountId').disabled = false;
+
+            const submitBtn = form.querySelector('button[type="submit"]');
+            submitBtn.textContent = '➕ 添加账号';
+            submitBtn.onclick = null;
+        }
+
+        // ===== 任务管理功能 =====
+
+        // 任务类型参数配置
+        const taskTypeParameters = {
+            flash_trade: [
+                { name: 'token_address', label: '代币地址', type: 'text', required: true, placeholder: '0x...' },
+                { name: 'usdt_amount', label: 'USDT金额', type: 'number', required: true, placeholder: '10.0', step: '0.1' },
+                { name: 'base_asset', label: '基础资产', type: 'text', placeholder: 'ALPHA_251' },
+                { name: 'target_volume', label: '目标交易量', type: 'number', placeholder: '100.0', step: '0.1' },
+                { name: 'auto_loop', label: '自动循环', type: 'checkbox' },
+                { name: 'price_precision', label: '价格精度', type: 'number', placeholder: '8' }
+            ],
+            auto_sell: [
+                { name: 'token_address', label: '代币地址', type: 'text', required: true, placeholder: '0xa4b68d48d7bc6f04420e8077e6f74bdef809dea3' },
+                { name: 'monitor_amount', label: '监控数量', type: 'number', required: true, placeholder: '1.0', step: '0.000001' }
+            ]
+        };
+
+        // 任务类型变化时更新参数表单
+        document.getElementById('taskType').addEventListener('change', function() {
+            updateTaskParameters(this.value);
+        });
+
+        // 更新任务参数表单
+        function updateTaskParameters(taskType) {
+            const container = document.getElementById('taskParameters');
+
+            if (!taskType || !taskTypeParameters[taskType]) {
+                container.innerHTML = '';
+                return;
+            }
+
+            const parameters = taskTypeParameters[taskType];
+            let html = '<h3 style="margin: 20px 0 15px 0;">任务参数</h3><div class="form-grid">';
+
+            parameters.forEach(param => {
+                html += `
+                    <div class="form-group">
+                        <label for="param_${param.name}">${param.label} ${param.required ? '*' : ''}</label>
+                        ${param.type === 'checkbox' ?
+                            `<input type="checkbox" id="param_${param.name}" name="${param.name}" style="width: auto;">` :
+                            `<input type="${param.type}" id="param_${param.name}" name="${param.name}"
+                                placeholder="${param.placeholder || ''}"
+                                ${param.step ? `step="${param.step}"` : ''}
+                                ${param.required ? 'required' : ''}>`
+                        }
+                    </div>
+                `;
+            });
+
+            html += '</div>';
+            container.innerHTML = html;
+        }
+
+        // 提交任务表单
+        document.getElementById('taskForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+
+            const formData = new FormData(e.target);
+
+            // 收集基本任务信息
+            const taskData = {
+                name: formData.get('name'),
+                type: formData.get('type'),
+                description: formData.get('description'),
+                priority: parseInt(formData.get('priority')) || 5,
+                target_accounts: Array.from(document.getElementById('targetAccounts').selectedOptions).map(opt => opt.value).filter(v => v),
+                created_by: 'web_user'
+            };
+
+            // 收集任务参数
+            const parameters = {};
+            const taskType = formData.get('type');
+            if (taskTypeParameters[taskType]) {
+                taskTypeParameters[taskType].forEach(param => {
+                    const value = formData.get(param.name);
+                    if (value !== null && value !== '') {
+                        if (param.type === 'number') {
+                            parameters[param.name] = parseFloat(value);
+                        } else if (param.type === 'checkbox') {
+                            parameters[param.name] = formData.has(param.name);
+                        } else {
+                            parameters[param.name] = value;
+                        }
+                    }
+                });
+            }
+            taskData.parameters = parameters;
+
+            try {
+                const response = await fetch('/api/v1/universal/tasks', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(taskData)
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    showMessage('任务创建成功！', 'success');
+                    e.target.reset();
+                    updateTaskParameters(''); // 清空参数表单
+                    loadTasks();
+                    loadStats();
+                } else {
+                    showMessage('创建任务失败: ' + data.message, 'error');
+                }
+            } catch (error) {
+                showMessage('创建任务时发生错误: ' + error.message, 'error');
+            }
+        });
+
+        // 启动任务
+        async function startTask(taskId) {
+            if (!confirm('确定要启动这个任务吗？')) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/v1/universal/tasks/${taskId}/start`, {
+                    method: 'POST'
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    showMessage('任务启动成功！', 'success');
+                    loadTasks();
+                } else {
+                    showMessage('启动任务失败: ' + data.message, 'error');
+                }
+            } catch (error) {
+                showMessage('启动任务时发生错误: ' + error.message, 'error');
+            }
+        }
+
+        // 查看任务详情
+        async function viewTask(taskId) {
+            try {
+                const response = await fetch(`/api/v1/universal/tasks/${taskId}`);
+                const data = await response.json();
+
+                if (data.success) {
+                    const task = data.task;
+                    showTaskDetails(task);
+                } else {
+                    showMessage('获取任务详情失败: ' + data.message, 'error');
+                }
+            } catch (error) {
+                showMessage('获取任务详情时发生错误: ' + error.message, 'error');
+            }
+        }
+
+        // 显示任务详情
+        function showTaskDetails(task) {
+            const modal = document.createElement('div');
+            modal.style.cssText = `
+                position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+                background: rgba(0,0,0,0.5); z-index: 1000; display: flex;
+                align-items: center; justify-content: center;
+            `;
+
+            const content = document.createElement('div');
+            content.style.cssText = `
+                background: white; border-radius: 10px; padding: 30px;
+                max-width: 600px; max-height: 80vh; overflow-y: auto;
+                box-shadow: 0 20px 40px rgba(0,0,0,0.3);
+            `;
+
+            const statusText = {
+                'pending': '等待中',
+                'running': '运行中',
+                'completed': '已完成',
+                'failed': '失败',
+                'cancelled': '已取消'
+            }[task.status] || task.status;
+
+            content.innerHTML = `
+                <h2 style="margin-bottom: 20px; color: #333;">📋 任务详情</h2>
+                <div style="line-height: 1.6;">
+                    <p><strong>任务ID:</strong> ${task.id}</p>
+                    <p><strong>名称:</strong> ${task.name}</p>
+                    <p><strong>类型:</strong> ${task.type}</p>
+                    <p><strong>状态:</strong> <span style="color: ${task.status === 'completed' ? '#28a745' : task.status === 'failed' ? '#dc3545' : '#667eea'}">${statusText}</span></p>
+                    <p><strong>进度:</strong> ${task.progress ? task.progress.percentage.toFixed(1) : 0}%</p>
+                    <p><strong>创建时间:</strong> ${new Date(task.created_at).toLocaleString()}</p>
+                    ${task.started_at ? `<p><strong>开始时间:</strong> ${new Date(task.started_at).toLocaleString()}</p>` : ''}
+                    ${task.completed_at ? `<p><strong>完成时间:</strong> ${new Date(task.completed_at).toLocaleString()}</p>` : ''}
+                    ${task.description ? `<p><strong>描述:</strong> ${task.description}</p>` : ''}
+                    ${task.error_message ? `<p><strong>错误信息:</strong> <span style="color: #dc3545">${task.error_message}</span></p>` : ''}
+
+                    <h3 style="margin: 20px 0 10px 0;">参数配置</h3>
+                    <pre style="background: #f8f9fa; padding: 15px; border-radius: 5px; overflow-x: auto;">${JSON.stringify(task.parameters, null, 2)}</pre>
+
+                    ${task.type === 'auto_sell' ? generateAutoSellDetails(task) : ''}
+
+                    ${task.results && Object.keys(task.results).length > 0 ? `
+                        <h3 style="margin: 20px 0 10px 0;">执行结果</h3>
+                        <pre style="background: #f8f9fa; padding: 15px; border-radius: 5px; overflow-x: auto;">${JSON.stringify(task.results, null, 2)}</pre>
+                    ` : ''}
+                </div>
+                <div style="text-align: center; margin-top: 20px;">
+                    <button onclick="this.closest('.modal').remove()" style="background: #667eea; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer;">关闭</button>
+                </div>
+            `;
+
+            modal.className = 'modal';
+            modal.appendChild(content);
+            document.body.appendChild(modal);
+
+            // 点击背景关闭
+            modal.addEventListener('click', function(e) {
+                if (e.target === modal) {
+                    modal.remove();
+                }
+            });
+        }
+
+        // ===== 通用功能 =====
+
+        // 显示消息
+        function showMessage(message, type) {
+            const messageEl = document.getElementById('message');
+            messageEl.textContent = message;
+            messageEl.className = `message ${type}`;
+            messageEl.style.display = 'block';
+
+            setTimeout(() => {
+                messageEl.style.display = 'none';
+            }, 5000);
+        }
+
+        // 生成自动卖出任务的详细信息
+        function generateAutoSellDetails(task) {
+            if (!task.parameters) return '';
+
+            const params = task.parameters;
+            let html = `
+                <h3 style="margin: 20px 0 10px 0;">🤖 自动卖出配置</h3>
+                <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; margin-bottom: 15px;">
+                    <p><strong>代币地址:</strong> <code>${params.token_address || 'N/A'}</code></p>
+                    <p><strong>监控数量:</strong> ${params.monitor_amount || 'N/A'}</p>
+                </div>
+            `;
+
+            // 如果有账号进度信息，显示详细状态
+            if (task.progress && task.progress.account_progress) {
+                html += `
+                    <h3 style="margin: 20px 0 10px 0;">📊 账号执行状态</h3>
+                    <div style="background: #f8f9fa; padding: 15px; border-radius: 5px;">
+                `;
+
+                Object.values(task.progress.account_progress).forEach(account => {
+                    const statusColor = {
+                        'monitoring': '#17a2b8',
+                        'completed': '#28a745',
+                        'failed': '#dc3545'
+                    }[account.status] || '#6c757d';
+
+                    html += `
+                        <div style="border-left: 4px solid ${statusColor}; padding-left: 10px; margin-bottom: 10px;">
+                            <p><strong>账号:</strong> ${account.account_id}</p>
+                            <p><strong>状态:</strong> <span style="color: ${statusColor}">${account.current_action || account.status}</span></p>
+                            <p><strong>进度:</strong> ${account.progress.toFixed(1)}%</p>
+                            ${account.stats ? `
+                                <p><strong>当前数量:</strong> ${account.stats.current_amount || 'N/A'}</p>
+                                <p><strong>代币符号:</strong> ${account.stats.symbol || 'N/A'}</p>
+                                ${account.stats.actual_usdt_amount ? `<p><strong>获得USDT:</strong> ${account.stats.actual_usdt_amount}</p>` : ''}
+                            ` : ''}
+                            ${account.error_message ? `<p style="color: #dc3545;"><strong>错误:</strong> ${account.error_message}</p>` : ''}
+                        </div>
+                    `;
+                });
+
+                html += `</div>`;
+            }
+
+            return html;
+        }
+
+        // 获取任务类型的显示名称
+        function getTaskTypeDisplay(type) {
+            const typeMap = {
+                'flash_trade': '⚡ Flash交易',
+                'auto_sell': '🤖 自动卖出',
+                'instant_trade': '🚀 即时交易'
+            };
+            return typeMap[type] || type;
+        }
+
+        // 获取状态的显示名称
+        function getStatusDisplay(status) {
+            const statusMap = {
+                'pending': '等待中',
+                'running': '运行中',
+                'completed': '已完成',
+                'failed': '失败',
+                'cancelled': '已取消'
+            };
+            return statusMap[status] || status;
+        }
+
+        // 从任务结果中获取代币符号
+        function getTokenSymbolFromResults(task) {
+            if (task.progress && task.progress.account_progress) {
+                for (const account of Object.values(task.progress.account_progress)) {
+                    if (account.stats && account.stats.symbol) {
+                        return account.stats.symbol;
+                    }
+                }
+            }
+            return null;
+        }
+
+        // 查看自动卖出任务的监控状态
+        async function viewAutoSellStatus(taskId) {
+            try {
+                const response = await fetch(`/api/v1/universal/tasks/${taskId}`);
+                const data = await response.json();
+
+                if (data.success) {
+                    const task = data.task;
+                    showAutoSellMonitorStatus(task);
+                } else {
+                    showMessage('获取监控状态失败: ' + data.message, 'error');
+                }
+            } catch (error) {
+                showMessage('获取监控状态时发生错误: ' + error.message, 'error');
+            }
+        }
+
+        // 显示自动卖出监控状态
+        function showAutoSellMonitorStatus(task) {
+            const modal = document.createElement('div');
+            modal.style.cssText = `
+                position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+                background: rgba(0,0,0,0.5); z-index: 1000; display: flex;
+                align-items: center; justify-content: center;
+            `;
+
+            const content = document.createElement('div');
+            content.style.cssText = `
+                background: white; border-radius: 10px; padding: 30px;
+                max-width: 800px; max-height: 80vh; overflow-y: auto;
+                box-shadow: 0 20px 40px rgba(0,0,0,0.3);
+            `;
+
+            let html = `
+                <h2 style="margin-bottom: 20px; color: #333;">🤖 自动卖出监控状态</h2>
+                <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; margin-bottom: 20px;">
+                    <p><strong>任务ID:</strong> ${task.id}</p>
+                    <p><strong>代币地址:</strong> <code>${task.parameters.token_address}</code></p>
+                    <p><strong>监控数量:</strong> ${task.parameters.monitor_amount}</p>
+                    <p><strong>总进度:</strong> ${task.progress ? task.progress.percentage.toFixed(1) : 0}%</p>
+                </div>
+            `;
+
+            if (task.progress && task.progress.account_progress) {
+                html += `<h3 style="margin-bottom: 15px;">📊 账号监控详情</h3>`;
+
+                Object.values(task.progress.account_progress).forEach(account => {
+                    const statusColor = {
+                        'monitoring': '#17a2b8',
+                        'completed': '#28a745',
+                        'failed': '#dc3545'
+                    }[account.status] || '#6c757d';
+
+                    html += `
+                        <div style="border: 1px solid #dee2e6; border-radius: 5px; padding: 15px; margin-bottom: 15px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                                <h4 style="margin: 0; color: #333;">账号: ${account.account_id}</h4>
+                                <span style="background: ${statusColor}; color: white; padding: 4px 8px; border-radius: 3px; font-size: 12px;">
+                                    ${account.current_action || account.status}
+                                </span>
+                            </div>
+
+                            ${account.stats ? `
+                                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin-bottom: 10px;">
+                                    <div><strong>代币符号:</strong> ${account.stats.symbol || 'N/A'}</div>
+                                    <div><strong>当前数量:</strong> ${account.stats.current_amount || 'N/A'}</div>
+                                    <div><strong>监控数量:</strong> ${account.stats.monitor_amount || 'N/A'}</div>
+                                    <div><strong>是否触发:</strong> ${account.stats.should_sell ? '✅ 是' : '❌ 否'}</div>
+                                    ${account.stats.actual_usdt_amount ? `<div><strong>获得USDT:</strong> ${account.stats.actual_usdt_amount}</div>` : ''}
+                                    ${account.stats.order_id ? `<div><strong>订单ID:</strong> ${account.stats.order_id}</div>` : ''}
+                                </div>
+                            ` : ''}
+
+                            <div style="font-size: 12px; color: #6c757d;">
+                                最后更新: ${new Date(account.last_update).toLocaleString()}
+                            </div>
+
+                            ${account.error_message ? `
+                                <div style="background: #f8d7da; color: #721c24; padding: 8px; border-radius: 3px; margin-top: 10px;">
+                                    <strong>错误:</strong> ${account.error_message}
+                                </div>
+                            ` : ''}
+                        </div>
+                    `;
+                });
+            } else {
+                html += `<p style="text-align: center; color: #6c757d;">暂无监控数据</p>`;
+            }
+
+            html += `
+                <div style="text-align: center; margin-top: 20px;">
+                    <button onclick="this.closest('.modal').remove()" style="background: #667eea; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; margin-right: 10px;">关闭</button>
+                    <button onclick="viewAutoSellStatus('${task.id}'); this.closest('.modal').remove();" style="background: #28a745; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer;">刷新</button>
+                </div>
+            `;
+
+            content.innerHTML = html;
+            modal.className = 'modal';
+            modal.appendChild(content);
+            document.body.appendChild(modal);
+
+            // 点击背景关闭
+            modal.addEventListener('click', (e) => {
+                if (e.target === modal) {
+                    modal.remove();
+                }
+            });
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,772 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>多节点账号管理</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        .header {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 15px;
+            padding: 30px;
+            margin-bottom: 30px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+            text-align: center;
+        }
+        
+        .header h1 {
+            color: #2c3e50;
+            margin-bottom: 10px;
+            font-size: 2.5em;
+        }
+        
+        .nodes-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .node-card {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 5px 20px rgba(0, 0, 0, 0.1);
+        }
+        
+        .node-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 2px solid #ecf0f1;
+        }
+        
+        .node-title {
+            color: #2c3e50;
+            font-size: 1.3em;
+            font-weight: bold;
+        }
+        
+        .node-status {
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 0.9em;
+            color: white;
+        }
+        
+        .status-online {
+            background: #27ae60;
+        }
+        
+        .status-offline {
+            background: #e74c3c;
+        }
+        
+        .btn {
+            display: inline-block;
+            padding: 10px 20px;
+            background: #3498db;
+            color: white;
+            text-decoration: none;
+            border-radius: 8px;
+            border: none;
+            cursor: pointer;
+            font-size: 0.9em;
+            margin: 3px;
+            transition: background 0.3s ease;
+        }
+        
+        .btn:hover {
+            background: #2980b9;
+        }
+        
+        .btn-success {
+            background: #27ae60;
+        }
+        
+        .btn-success:hover {
+            background: #229954;
+        }
+        
+        .btn-danger {
+            background: #e74c3c;
+        }
+        
+        .btn-danger:hover {
+            background: #c0392b;
+        }
+        
+        .btn-small, .btn-sm {
+            padding: 6px 12px;
+            font-size: 0.8em;
+            margin-right: 5px;
+        }
+        
+        .account-list {
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        
+        .account-item {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 8px;
+            border-left: 4px solid #3498db;
+            position: relative;
+        }
+
+        .account-item.inactive {
+            border-left-color: #95a5a6;
+            opacity: 0.7;
+        }
+
+        .account-item.looping {
+            border-left-color: #28a745;
+            background: linear-gradient(135deg, #d4edda 0%, #f8f9fa 100%);
+        }
+
+        .account-item.expired {
+            border-left-color: #dc3545;
+            background: linear-gradient(135deg, #f8d7da 0%, #f8f9fa 100%);
+        }
+
+        .account-item.warning {
+            border-left-color: #ffc107;
+            background: linear-gradient(135deg, #fff3cd 0%, #f8f9fa 100%);
+        }
+
+        .account-status-badge {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .account-status-badge.active {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .account-status-badge.looping {
+            background: #d1ecf1;
+            color: #0c5460;
+        }
+
+        .account-status-badge.expired {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .account-status-badge.warning {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .account-details {
+            margin-top: 8px;
+            font-size: 12px;
+            color: #666;
+        }
+
+        .account-progress {
+            margin-top: 8px;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 6px;
+            background: #e9ecef;
+            border-radius: 3px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(45deg, #3498db, #2980b9);
+            transition: width 0.3s ease;
+        }
+        
+        .account-name {
+            font-weight: bold;
+            color: #2c3e50;
+            margin-bottom: 5px;
+        }
+        
+        .account-id {
+            font-size: 0.9em;
+            color: #7f8c8d;
+            margin-bottom: 8px;
+        }
+        
+        .account-actions {
+            display: flex;
+            gap: 5px;
+        }
+        
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+        }
+        
+        .modal-content {
+            background-color: white;
+            margin: 5% auto;
+            padding: 30px;
+            border-radius: 15px;
+            width: 90%;
+            max-width: 500px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+        }
+        
+        .close {
+            color: #aaa;
+            float: right;
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        
+        .close:hover {
+            color: #000;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            color: #2c3e50;
+            font-weight: bold;
+        }
+        
+        .form-group input,
+        .form-group textarea,
+        .form-group select {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #ecf0f1;
+            border-radius: 8px;
+            font-size: 1em;
+            transition: border-color 0.3s ease;
+        }
+        
+        .form-group input:focus,
+        .form-group textarea:focus,
+        .form-group select:focus {
+            outline: none;
+            border-color: #3498db;
+        }
+        
+        .form-group textarea {
+            height: 80px;
+            resize: vertical;
+        }
+        
+        .alert {
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 8px;
+            display: none;
+        }
+        
+        .alert-success {
+            background-color: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+        }
+        
+        .alert-error {
+            background-color: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+        }
+        
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #3498db;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🌐 多节点账号管理</h1>
+            <p class="subtitle">集中管理所有被控端的币安账号 - 统一配置，分布执行</p>
+
+            <div style="background: #fff3cd; border: 1px solid #ffeaa7; border-radius: 8px; padding: 15px; margin: 20px 0; text-align: center;">
+                <p style="color: #856404; margin-bottom: 10px;">
+                    <strong>🎛️ 推荐使用新的通用管理中心</strong>
+                </p>
+                <p style="color: #856404; margin-bottom: 15px;">
+                    通用管理中心提供更完整的账号和任务管理功能，支持多种任务类型
+                </p>
+                <a href="/universal-management" style="background: #667eea; color: white; padding: 10px 20px; border-radius: 6px; text-decoration: none; display: inline-block;">
+                    前往通用管理中心 →
+                </a>
+            </div>
+
+            <div style="margin-top: 20px;">
+                <button class="btn btn-success" onclick="showAddAccountModal()">
+                    ➕ 添加账号到节点
+                </button>
+                <button class="btn" onclick="refreshNodes()">
+                    🔄 刷新节点
+                </button>
+            </div>
+        </div>
+        
+        <div class="alert alert-success" id="successAlert"></div>
+        <div class="alert alert-error" id="errorAlert"></div>
+        
+        <div class="nodes-grid" id="nodesGrid">
+            <div style="text-align: center; color: #7f8c8d;">
+                <div class="loading"></div>
+                <p>加载节点列表中...</p>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 添加账号模态框 -->
+    <div id="addAccountModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeAddAccountModal()">&times;</span>
+            <h2>添加账号到节点</h2>
+            <form id="addAccountForm">
+                <div class="form-group">
+                    <label for="targetNode">目标节点 *</label>
+                    <select id="targetNode" name="nodeId" required>
+                        <option value="">请选择节点</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label for="accountId">账号ID *</label>
+                    <input type="text" id="accountId" name="id" required placeholder="唯一标识符，如: account_001">
+                </div>
+                
+                <div class="form-group">
+                    <label for="accountName">账号名称</label>
+                    <input type="text" id="accountName" name="name" placeholder="便于识别的名称">
+                </div>
+                
+                <div class="form-group">
+                    <label for="csrftoken">CSRF Token *</label>
+                    <input type="text" id="csrftoken" name="csrftoken" required placeholder="从币安网站获取的CSRF Token">
+                </div>
+                
+                <div class="form-group">
+                    <label for="cookie">Cookie *</label>
+                    <textarea id="cookie" name="cookie" required placeholder="从币安网站获取的完整Cookie字符串"></textarea>
+                </div>
+                
+                <div class="form-group">
+                    <label for="description">描述</label>
+                    <textarea id="description" name="description" placeholder="账号描述信息"></textarea>
+                </div>
+                
+                <div style="text-align: right;">
+                    <button type="button" class="btn" onclick="closeAddAccountModal()">取消</button>
+                    <button type="submit" class="btn btn-success">添加账号</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        let nodes = {};
+        
+        // 页面加载完成后初始化
+        document.addEventListener('DOMContentLoaded', function() {
+            refreshNodes();
+            refreshAccountStatus();
+
+            // 每30秒自动刷新节点
+            setInterval(refreshNodes, 30000);
+            // 每10秒刷新账号状态
+            setInterval(refreshAccountStatus, 10000);
+        });
+
+        let accountStatusData = {};
+        
+        // 刷新节点列表
+        async function refreshNodes() {
+            try {
+                const response = await fetch('/api/v1/nodes');
+                const data = await response.json();
+                
+                if (data.success) {
+                    nodes = data.nodes || {};
+                    displayNodes(nodes);
+                    updateNodeSelector();
+                } else {
+                    showError('获取节点列表失败: ' + data.message);
+                }
+            } catch (error) {
+                showError('网络错误: ' + error.message);
+            }
+        }
+        
+        // 显示节点列表
+        function displayNodes(nodesList) {
+            const nodesGrid = document.getElementById('nodesGrid');
+            
+            if (Object.keys(nodesList).length === 0) {
+                nodesGrid.innerHTML = `
+                    <div style="text-align: center; color: #7f8c8d; padding: 40px;">
+                        <p>暂无在线节点</p>
+                        <p>请启动被控端节点</p>
+                    </div>
+                `;
+                return;
+            }
+            
+            let html = '';
+            for (const [nodeId, node] of Object.entries(nodesList)) {
+                html += `
+                    <div class="node-card">
+                        <div class="node-header">
+                            <div class="node-title">${nodeId}</div>
+                            <div class="node-status status-${node.status || 'offline'}">${getStatusText(node.status || 'offline')}</div>
+                        </div>
+                        
+                        <div style="margin-bottom: 15px;">
+                            <button class="btn btn-success" onclick="showAddAccountModal('${nodeId}')">
+                                ➕ 添加账号
+                            </button>
+                            <button class="btn" onclick="refreshNodeAccounts('${nodeId}')">
+                                🔄 刷新
+                            </button>
+                        </div>
+                        
+                        <div class="account-list" id="accounts-${nodeId}">
+                            <div style="text-align: center; color: #7f8c8d;">
+                                <div class="loading"></div>
+                                <p>加载账号中...</p>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+            
+            nodesGrid.innerHTML = html;
+            
+            // 加载每个节点的账号
+            for (const nodeId of Object.keys(nodesList)) {
+                refreshNodeAccounts(nodeId);
+            }
+        }
+        
+        // 获取状态文本
+        function getStatusText(status) {
+            const statusMap = {
+                'online': '在线',
+                'offline': '离线'
+            };
+            return statusMap[status] || status;
+        }
+        
+        // 刷新账号状态
+        async function refreshAccountStatus() {
+            try {
+                const response = await fetch('/api/v1/universal/accounts');
+                const data = await response.json();
+
+                if (data.success) {
+                    // 转换数据格式以兼容现有显示逻辑
+                    accountStatusData = {};
+                    Object.entries(data.accounts || {}).forEach(([accountId, account]) => {
+                        const nodeId = account.assigned_node || 'unassigned';
+                        if (!accountStatusData[nodeId]) {
+                            accountStatusData[nodeId] = { accounts: [] };
+                        }
+                        accountStatusData[nodeId].accounts.push({
+                            account_id: accountId,
+                            name: account.name || accountId,
+                            status: account.status,
+                            expires_at: new Date(account.expires_at).getTime() / 1000
+                        });
+                    });
+                    updateAccountsDisplay();
+                }
+            } catch (error) {
+                console.error('刷新账号状态失败:', error);
+            }
+        }
+
+        // 更新账号显示
+        function updateAccountsDisplay() {
+            for (const [nodeId, node] of Object.entries(nodes)) {
+                refreshNodeAccounts(nodeId);
+            }
+        }
+
+        // 刷新节点账号
+        async function refreshNodeAccounts(nodeId) {
+            try {
+                const response = await fetch('/api/v1/universal/accounts');
+                const data = await response.json();
+
+                const accountsContainer = document.getElementById(`accounts-${nodeId}`);
+                if (data.success) {
+                    // 过滤出分配给该节点的账号
+                    const nodeAccounts = Object.entries(data.accounts || {})
+                        .filter(([_, account]) => account.assigned_node === nodeId)
+                        .map(([accountId, account]) => ({
+                            account_id: accountId,
+                            name: account.name || accountId,
+                            status: account.status,
+                            expires_at: new Date(account.expires_at).getTime() / 1000
+                        }));
+
+                    if (nodeAccounts.length > 0) {
+                        displayAccountsForNode(nodeId, nodeAccounts);
+                    } else {
+                        accountsContainer.innerHTML = `
+                            <div style="text-align: center; color: #7f8c8d;">
+                                <p>暂无账号</p>
+                                <p>点击"添加账号"开始配置</p>
+                            </div>
+                        `;
+                    }
+                } else {
+                    accountsContainer.innerHTML = `
+                        <div style="text-align: center; color: #7f8c8d;">
+                            <p>暂无账号</p>
+                            <p>点击"添加账号"开始配置</p>
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                const accountsContainer = document.getElementById(`accounts-${nodeId}`);
+                accountsContainer.innerHTML = `
+                    <div style="text-align: center; color: #e74c3c;">
+                        <p>网络错误: ${error.message}</p>
+                    </div>
+                `;
+            }
+        }
+
+        // 显示节点的账号列表
+        function displayAccountsForNode(nodeId, accounts) {
+            const accountsContainer = document.getElementById(`accounts-${nodeId}`);
+            const nodeStatus = accountStatusData[nodeId];
+
+            let html = '';
+            accounts.forEach(account => {
+                // 从状态数据中获取实时信息
+                let accountStatus = null;
+                if (nodeStatus && nodeStatus.accounts) {
+                    accountStatus = nodeStatus.accounts.find(a => a.account_id === account.id);
+                }
+
+                const expiresAt = new Date(account.created_at);
+                expiresAt.setTime(expiresAt.getTime() + (4.5 * 24 * 60 * 60 * 1000)); // 4.5天后
+                const now = new Date();
+                const hoursUntilExpiry = (expiresAt - now) / (1000 * 60 * 60);
+
+                let itemClass = 'account-item';
+                let statusBadgeClass = 'account-status-badge';
+                let statusText = account.status || 'active';
+
+                if (accountStatus) {
+                    if (accountStatus.is_looping) {
+                        itemClass += ' looping';
+                        statusBadgeClass += ' looping';
+                        statusText = '交易中';
+                    } else if (accountStatus.status === 'expired' || hoursUntilExpiry <= 0) {
+                        itemClass += ' expired';
+                        statusBadgeClass += ' expired';
+                        statusText = '已过期';
+                    } else if (hoursUntilExpiry <= 24) {
+                        itemClass += ' warning';
+                        statusBadgeClass += ' warning';
+                        statusText = '即将过期';
+                    } else {
+                        statusBadgeClass += ' active';
+                        statusText = '正常';
+                    }
+                }
+
+                const completionRate = accountStatus ? accountStatus.completion_rate || 0 : 0;
+                const currentToken = accountStatus ? accountStatus.current_token || '无' : '无';
+                const totalVolume = accountStatus ? accountStatus.total_volume || 0 : 0;
+                const targetVolume = accountStatus ? accountStatus.target_volume || 0 : 0;
+                const totalLoss = accountStatus ? accountStatus.total_loss || 0 : 0;
+
+                html += `
+                    <div class="${itemClass}">
+                        <div class="${statusBadgeClass}">${statusText}</div>
+                        <div class="account-name">${account.name || account.id}</div>
+                        <div class="account-details">
+                            <div>ID: ${account.id}</div>
+                            <div>过期时间: ${expiresAt.toLocaleString()}</div>
+                            ${accountStatus ? `
+                                <div>当前代币: ${currentToken.substring(0, 10)}...</div>
+                                <div>交易量: ${totalVolume.toFixed(2)}/${targetVolume.toFixed(2)} USDT</div>
+                                <div>磨损: ${totalLoss.toFixed(6)} USDT</div>
+                            ` : ''}
+                        </div>
+                        ${accountStatus && targetVolume > 0 ? `
+                            <div class="account-progress">
+                                <div class="progress-bar">
+                                    <div class="progress-fill" style="width: ${Math.min(completionRate, 100)}%"></div>
+                                </div>
+                                <div style="text-align: center; margin-top: 4px; font-size: 11px;">
+                                    完成率: ${completionRate.toFixed(1)}%
+                                </div>
+                            </div>
+                        ` : ''}
+                        <div style="margin-top: 8px;">
+                            <button class="btn btn-sm" onclick="editAccount('${nodeId}', '${account.id}')">编辑</button>
+                            <button class="btn btn-sm btn-danger" onclick="deleteAccount('${nodeId}', '${account.id}')">删除</button>
+                        </div>
+                    </div>
+                `;
+            });
+
+            accountsContainer.innerHTML = html;
+        }
+        
+        // 显示添加账号模态框
+        function showAddAccountModal(nodeId = '') {
+            const modal = document.getElementById('addAccountModal');
+            const nodeSelector = document.getElementById('targetNode');
+            
+            if (nodeId) {
+                nodeSelector.value = nodeId;
+            }
+            
+            modal.style.display = 'block';
+        }
+        
+        // 关闭添加账号模态框
+        function closeAddAccountModal() {
+            document.getElementById('addAccountModal').style.display = 'none';
+            document.getElementById('addAccountForm').reset();
+        }
+        
+        // 更新节点选择器
+        function updateNodeSelector() {
+            const nodeSelector = document.getElementById('targetNode');
+            nodeSelector.innerHTML = '<option value="">请选择节点</option>';
+            
+            for (const [nodeId, node] of Object.entries(nodes)) {
+                if (node.status === 'online') {
+                    const option = document.createElement('option');
+                    option.value = nodeId;
+                    option.textContent = `${nodeId} (在线)`;
+                    nodeSelector.appendChild(option);
+                }
+            }
+        }
+        
+        // 添加账号表单提交
+        document.getElementById('addAccountForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const formData = new FormData(e.target);
+            const nodeId = formData.get('nodeId');
+            const accountData = {
+                id: formData.get('id'),
+                name: formData.get('name'),
+                csrftoken: formData.get('csrftoken'),
+                cookie: formData.get('cookie'),
+                description: formData.get('description')
+            };
+            
+            if (!nodeId) {
+                showError('请选择目标节点');
+                return;
+            }
+            
+            try {
+                // 添加节点分配信息
+                accountData.assigned_node = nodeId;
+
+                const response = await fetch('/api/v1/universal/accounts', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(accountData)
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    showSuccess(`账号已成功添加到节点 ${nodeId}`);
+                    closeAddAccountModal();
+                    refreshNodeAccounts(nodeId);
+                } else {
+                    showError('添加失败: ' + data.message);
+                }
+            } catch (error) {
+                showError('网络错误: ' + error.message);
+            }
+        });
+        
+        // 显示成功消息
+        function showSuccess(message) {
+            const alert = document.getElementById('successAlert');
+            alert.textContent = message;
+            alert.style.display = 'block';
+            setTimeout(() => {
+                alert.style.display = 'none';
+            }, 3000);
+        }
+        
+        // 显示错误消息
+        function showError(message) {
+            const alert = document.getElementById('errorAlert');
+            alert.textContent = message;
+            alert.style.display = 'block';
+            setTimeout(() => {
+                alert.style.display = 'none';
+            }, 5000);
+        }
+    </script>
+</body>
+</html>

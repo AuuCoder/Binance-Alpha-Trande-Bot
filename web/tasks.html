@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>任务管理</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            color: #333;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .nav {
+            display: flex;
+            justify-content: center;
+            margin-bottom: 30px;
+            gap: 10px;
+        }
+
+        .nav-btn {
+            padding: 10px 20px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        .nav-btn:hover {
+            background: #5a6fd8;
+            transform: translateY(-2px);
+        }
+
+        .section {
+            background: white;
+            border-radius: 10px;
+            padding: 25px;
+            margin-bottom: 20px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.08);
+        }
+
+        .section h2 {
+            margin-bottom: 20px;
+            color: #333;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 10px;
+        }
+
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+
+        .data-table th,
+        .data-table td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #e1e5e9;
+        }
+
+        .data-table th {
+            background: #f8f9fa;
+            font-weight: 600;
+            color: #555;
+        }
+
+        .data-table tr:hover {
+            background: #f8f9fa;
+        }
+
+        .status-badge {
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .status-pending {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .status-running {
+            background: #d1ecf1;
+            color: #0c5460;
+        }
+
+        .status-completed {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .status-failed {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .btn {
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            margin-right: 5px;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-success {
+            background: linear-gradient(45deg, #27ae60, #2ecc71);
+        }
+
+        .btn-danger {
+            background: linear-gradient(45deg, #e74c3c, #c0392b);
+        }
+
+        .no-data {
+            text-align: center;
+            color: #666;
+            padding: 40px;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 6px;
+            background: #e9ecef;
+            border-radius: 3px;
+            overflow: hidden;
+            margin-top: 5px;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            transition: width 0.3s ease;
+        }
+
+        @media (max-width: 768px) {
+            .data-table {
+                font-size: 12px;
+            }
+
+            .data-table th,
+            .data-table td {
+                padding: 8px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📋 任务管理</h1>
+            <p>查看和管理系统任务</p>
+        </div>
+
+        <div class="nav">
+            <a href="/" class="nav-btn">🏠 首页</a>
+            <a href="/universal-management" class="nav-btn">🎛️ 通用管理</a>
+            <a href="/account-status" class="nav-btn">📊 状态监控</a>
+            <a href="/flash-trade" class="nav-btn">⚡ Flash Trade</a>
+            <a href="/tasks" class="nav-btn">📋 任务管理</a>
+        </div>
+
+        <!-- 传统任务 -->
+        <div class="section">
+            <h2>传统任务 (兼容模式)</h2>
+            <div id="legacyTasks">
+                <p style="text-align: center; color: #666;">传统任务管理功能</p>
+            </div>
+        </div>
+
+        <!-- 通用任务 -->
+        <div class="section">
+            <h2>通用任务管理</h2>
+            <p style="margin-bottom: 15px; color: #666;">
+                推荐使用 <a href="/universal-management" style="color: #667eea; text-decoration: none;">🎛️ 通用管理中心</a> 进行完整的任务管理
+            </p>
+            <table class="data-table" id="universalTasksTable">
+                <thead>
+                    <tr>
+                        <th>任务ID</th>
+                        <th>名称</th>
+                        <th>类型</th>
+                        <th>状态</th>
+                        <th>进度</th>
+                        <th>创建时间</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <!-- 任务数据将通过JavaScript动态生成 -->
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        // 页面加载时初始化
+        document.addEventListener('DOMContentLoaded', function() {
+            loadUniversalTasks();
+            
+            // 设置定时刷新
+            setInterval(loadUniversalTasks, 15000); // 每15秒刷新
+        });
+
+        // 加载通用任务
+        async function loadUniversalTasks() {
+            try {
+                const response = await fetch('/api/v1/universal/tasks');
+                const data = await response.json();
+                
+                if (data.success) {
+                    displayUniversalTasks(data.tasks || {});
+                }
+            } catch (error) {
+                console.error('加载通用任务失败:', error);
+                displayError();
+            }
+        }
+
+        // 显示通用任务
+        function displayUniversalTasks(tasks) {
+            const tbody = document.querySelector('#universalTasksTable tbody');
+            
+            if (Object.keys(tasks).length === 0) {
+                tbody.innerHTML = '<tr><td colspan="7" class="no-data">暂无任务数据</td></tr>';
+                return;
+            }
+
+            let html = '';
+            Object.values(tasks).forEach(task => {
+                const statusClass = `status-${task.status}`;
+                const createdDate = new Date(task.created_at).toLocaleString();
+                const progress = task.progress ? task.progress.percentage.toFixed(1) + '%' : '0%';
+                
+                // 状态显示文本
+                const statusText = {
+                    'pending': '等待中',
+                    'running': '运行中',
+                    'completed': '已完成',
+                    'failed': '失败',
+                    'cancelled': '已取消',
+                    'paused': '已暂停'
+                }[task.status] || task.status;
+
+                // 任务类型显示文本
+                const typeText = {
+                    'flash_trade': 'Flash Trade',
+                    'auto_sell': '自动卖出',
+                    'bulk_trade': '批量交易',
+                    'custom': '自定义'
+                }[task.type] || task.type;
+
+                html += `
+                    <tr>
+                        <td>${task.id}</td>
+                        <td>${task.name}</td>
+                        <td>${typeText}</td>
+                        <td><span class="status-badge ${statusClass}">${statusText}</span></td>
+                        <td>
+                            <div>${progress}</div>
+                            <div class="progress-bar">
+                                <div class="progress-fill" style="width: ${task.progress ? task.progress.percentage : 0}%"></div>
+                            </div>
+                        </td>
+                        <td>${createdDate}</td>
+                        <td>
+                            ${task.status === 'pending' ? `<button class="btn btn-success" onclick="startTask('${task.id}')">启动</button>` : ''}
+                            <button class="btn" onclick="viewTask('${task.id}')">查看</button>
+                            ${task.status === 'running' ? `<button class="btn btn-danger" onclick="stopTask('${task.id}')">停止</button>` : ''}
+                        </td>
+                    </tr>
+                `;
+            });
+
+            tbody.innerHTML = html;
+        }
+
+        // 启动任务
+        async function startTask(taskId) {
+            try {
+                const response = await fetch(`/api/v1/universal/tasks/${taskId}/start`, {
+                    method: 'POST'
+                });
+                const data = await response.json();
+                
+                if (data.success) {
+                    alert('任务启动成功！');
+                    loadUniversalTasks(); // 刷新列表
+                } else {
+                    alert('任务启动失败: ' + data.message);
+                }
+            } catch (error) {
+                alert('启动任务时发生错误: ' + error.message);
+            }
+        }
+
+        // 查看任务详情
+        async function viewTask(taskId) {
+            try {
+                const response = await fetch(`/api/v1/universal/tasks/${taskId}`);
+                const data = await response.json();
+                
+                if (data.success) {
+                    const task = data.task;
+                    let details = `任务详情:\n\n`;
+                    details += `ID: ${task.id}\n`;
+                    details += `名称: ${task.name}\n`;
+                    details += `类型: ${task.type}\n`;
+                    details += `状态: ${task.status}\n`;
+                    details += `进度: ${task.progress ? task.progress.percentage.toFixed(1) : 0}%\n`;
+                    details += `创建时间: ${new Date(task.created_at).toLocaleString()}\n`;
+                    
+                    if (task.started_at) {
+                        details += `开始时间: ${new Date(task.started_at).toLocaleString()}\n`;
+                    }
+                    
+                    if (task.completed_at) {
+                        details += `完成时间: ${new Date(task.completed_at).toLocaleString()}\n`;
+                    }
+                    
+                    if (task.description) {
+                        details += `描述: ${task.description}\n`;
+                    }
+                    
+                    if (task.error_message) {
+                        details += `错误信息: ${task.error_message}\n`;
+                    }
+                    
+                    alert(details);
+                } else {
+                    alert('获取任务详情失败: ' + data.message);
+                }
+            } catch (error) {
+                alert('获取任务详情时发生错误: ' + error.message);
+            }
+        }
+
+        // 停止任务
+        function stopTask(taskId) {
+            alert('停止任务功能暂未实现');
+        }
+
+        // 显示错误信息
+        function displayError() {
+            const tbody = document.querySelector('#universalTasksTable tbody');
+            tbody.innerHTML = '<tr><td colspan="7" class="no-data">加载任务数据失败，请稍后重试</td></tr>';
+        }
+    </script>
+</body>
+</html>

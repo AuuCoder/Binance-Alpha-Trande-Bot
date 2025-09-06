@@ -1,0 +1,38 @@
+{
+  "server": {
+    "port": 18080,
+    "host": "0.0.0.0",
+    "mode": "master",
+    "node_id": "master-server",
+    "master_addr": ""
+  },
+  "redis": {
+    "addr": "43.156.131.41:6379",
+    "password": "",
+    "db": 0
+  },
+  "grpc": {
+    "port": 19090,
+    "max_recv_msg_size": 4194304,
+    "max_send_msg_size": 4194304,
+    "connection_timeout": 10,
+    "keepalive_time": 30,
+    "keepalive_timeout": 5
+  },
+  "binance": {
+    "base_url": "https://www.binance.com",
+    "ws_url": "wss://nbstream.binance.com/w3w/wsa/stream",
+    "request_timeout": 10,
+    "max_retries": 3,
+    "retry_delay": 1000,
+    "price_cache_time": 5
+  },
+  "log": {
+    "level": "info",
+    "format": "text",
+    "output": "stdout",
+    "max_size": 100,
+    "max_backups": 3,
+    "max_age": 7
+  }
+}

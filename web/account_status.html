@@ -1,0 +1,4420 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>账号实时监控</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .navbar {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 15px 30px;
+            margin-bottom: 20px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .nav-brand {
+            font-size: 1.5em;
+            font-weight: bold;
+            color: #2c3e50;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 20px;
+            align-items: center;
+        }
+
+        .nav-btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            text-decoration: none;
+            color: #495057;
+            background: #f8f9fa;
+            transition: all 0.3s ease;
+            font-size: 14px;
+            cursor: pointer;
+        }
+
+        .nav-btn:hover {
+            background: #e9ecef;
+            transform: translateY(-1px);
+        }
+
+        .nav-btn.active {
+            background: #007bff;
+            color: white;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            color: #2c3e50;
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            color: #7f8c8d;
+            font-size: 1.1em;
+        }
+
+
+
+        .stats-summary {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        /* 🔧 修改：与nodes页面保持一致的统计卡片样式 */
+        .stat-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+        }
+
+        .stat-number {
+            font-size: 2em;
+            font-weight: 600;
+            margin-bottom: 5px;
+        }
+
+        .stat-label {
+            opacity: 0.9;
+        }
+
+        /* 🔧 保留：向后兼容的样式 */
+        .stat-card h3 {
+            color: white;
+            margin-bottom: 10px;
+            opacity: 0.9;
+            font-size: 14px;
+        }
+
+        .stat-card .number {
+            font-size: 2em;
+            font-weight: 600;
+            color: white;
+            margin: 0;
+        }
+
+        .nodes-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 20px;
+        }
+
+        /* 小屏幕适配：在移动设备上改为单列 */
+        @media (max-width: 768px) {
+            .nodes-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .node-card {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+        }
+
+        /* 🔧 修改：异常节点样式 - 红色边框 */
+        .node-card.abnormal {
+            border: 3px solid #dc3545 !important;
+            background: linear-gradient(135deg, #fff5f5 0%, #ffffff 100%);
+            animation: node-abnormal-pulse 2s infinite;
+            box-shadow: 0 4px 20px rgba(220, 53, 69, 0.3);
+        }
+
+        /* 🔧 新增：在线节点样式 - 绿色边框 */
+        .node-card.online {
+            border: 3px solid #28a745 !important;
+            background: linear-gradient(135deg, #f8fff9 0%, #ffffff 100%);
+            box-shadow: 0 4px 20px rgba(40, 167, 69, 0.2);
+        }
+
+        /* 🔧 修改：节点空闲样式 */
+        .node-card.idle {
+            border: 1px dashed #ced4da;
+            background: linear-gradient(135deg, #f8f9fa 0%, #ffffff 100%);
+            opacity: 0.8;
+        }
+
+        /* 🔧 新增：离线节点样式 */
+        .node-card.offline {
+            border: 2px solid #6c757d;
+            background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+            opacity: 0.6;
+        }
+
+        .node-card.offline .node-name {
+            color: #6c757d;
+        }
+
+        /* 🔧 修改：Flash Trade活跃节点特殊样式 - 绿色边框表示在线 */
+        .node-card[data-node-id="flash_trade_active_node"] {
+            border: 3px solid #28a745 !important;
+            background: linear-gradient(135deg, #f8fff9 0%, #ffffff 100%);
+            box-shadow: 0 4px 20px rgba(40, 167, 69, 0.3);
+        }
+
+        .node-card[data-node-id="flash_trade_active_node"] .node-name {
+            color: #28a745;
+            font-weight: bold;
+        }
+
+        @keyframes node-abnormal-pulse {
+            0%, 100% {
+                box-shadow: 0 0 15px rgba(220, 53, 69, 0.3);
+                border-color: #dc3545;
+            }
+            50% {
+                box-shadow: 0 0 25px rgba(220, 53, 69, 0.5);
+                border-color: #ff1744;
+            }
+        }
+
+        .node-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #ecf0f1;
+        }
+
+        .node-name {
+            font-size: 1.3em;
+            font-weight: bold;
+            color: #2c3e50;
+        }
+
+        .node-status {
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 0.9em;
+            font-weight: bold;
+        }
+
+        .node-status.online {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .node-status.online.active {
+            background: linear-gradient(135deg, #007bff 0%, #0056b3 100%);
+            color: white;
+            animation: status-pulse 2s infinite;
+        }
+
+        .node-status.offline {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        @keyframes status-pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.8; }
+        }
+
+        /* 🔧 新增：统计数据更新动画 */
+        @keyframes stat-update {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.1); color: #007bff; }
+            100% { transform: scale(1); }
+        }
+
+        /* 🔧 新增：加载动画 */
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        /* 🔧 新增：节点详细统计样式 */
+        .node-stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 25px;
+            margin-top: 20px;
+        }
+
+        .node-stat-card {
+            background: linear-gradient(135deg, #ffffff 0%, #f8f9fa 100%);
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1);
+            border: 1px solid #e9ecef;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .node-stat-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+        }
+
+        .node-stat-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.15);
+        }
+
+        .node-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 2px solid #e9ecef;
+        }
+
+        .node-title {
+            font-size: 1.3em;
+            font-weight: 600;
+            color: #2c3e50;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .node-status {
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .node-status.online {
+            background: linear-gradient(135deg, #28a745, #20c997);
+            color: white;
+        }
+
+        .node-status.offline {
+            background: linear-gradient(135deg, #dc3545, #c82333);
+            color: white;
+        }
+
+        .node-info {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .info-item {
+            text-align: center;
+            padding: 12px;
+            background: rgba(102, 126, 234, 0.1);
+            border-radius: 10px;
+            border: 1px solid rgba(102, 126, 234, 0.2);
+        }
+
+        .info-label {
+            font-size: 12px;
+            color: #6c757d;
+            margin-bottom: 5px;
+            font-weight: 500;
+        }
+
+        .info-value {
+            font-size: 16px;
+            font-weight: 600;
+            color: #2c3e50;
+        }
+
+        /* 账户详情区域样式 */
+        .accounts-section {
+            margin-top: 20px;
+            border: 2px solid #e9ecef;
+            border-radius: 12px;
+            overflow: hidden;
+            background: white;
+        }
+
+        .accounts-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px 20px;
+            background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+            border-bottom: 1px solid #dee2e6;
+        }
+
+        .accounts-header strong {
+            color: #495057;
+            font-size: 14px;
+        }
+
+        .toggle-accounts-btn {
+            background: linear-gradient(135deg, #007bff, #0056b3);
+            color: white;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.2s ease;
+        }
+
+        .toggle-accounts-btn:hover {
+            transform: scale(1.05);
+            box-shadow: 0 2px 8px rgba(0, 123, 255, 0.3);
+        }
+
+        .accounts-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 15px;
+            padding: 20px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .account-card {
+            border: 2px solid #e9ecef;
+            border-radius: 10px;
+            padding: 15px;
+            background: white;
+            transition: all 0.3s ease;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+            position: relative;
+        }
+
+        .account-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 20px rgba(0,0,0,0.15);
+        }
+
+        .account-card.account-active {
+            border-left: 5px solid #28a745;
+            background: linear-gradient(135deg, #ffffff 0%, #f8fff9 100%);
+        }
+
+        .account-card.account-idle {
+            border-left: 5px solid #6c757d;
+            background: linear-gradient(135deg, #ffffff 0%, #f8f9fa 100%);
+        }
+
+        .account-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+
+        .account-name {
+            font-weight: 600;
+            color: #2c3e50;
+            font-size: 14px;
+        }
+
+        .account-status {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .status-icon {
+            font-size: 16px;
+        }
+
+        .status-text {
+            font-size: 12px;
+            font-weight: 500;
+            padding: 3px 8px;
+            border-radius: 12px;
+            background: rgba(0,0,0,0.1);
+        }
+
+        .account-progress {
+            margin-bottom: 12px;
+        }
+
+        .progress-info {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 6px;
+            font-size: 12px;
+            color: #6c757d;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 6px;
+            background: #e9ecef;
+            border-radius: 3px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            transition: width 0.5s ease;
+            border-radius: 3px;
+        }
+
+        .account-details {
+            font-size: 12px;
+        }
+
+        .detail-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 6px;
+            padding: 4px 0;
+        }
+
+        .detail-label {
+            color: #6c757d;
+            font-weight: 500;
+        }
+
+        .detail-value {
+            color: #2c3e50;
+            font-weight: 600;
+        }
+
+        .token-name {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+        }
+
+        .loss-value {
+            color: #dc3545;
+            font-weight: 600;
+        }
+
+        .no-accounts {
+            text-align: center;
+            padding: 40px 20px;
+            color: #6c757d;
+            font-style: italic;
+        }
+
+        /* 紧凑模式样式 */
+        .compact-mode .node-stat-card {
+            padding: 15px;
+        }
+
+        .compact-mode .node-header {
+            margin-bottom: 12px;
+            padding-bottom: 10px;
+        }
+
+        .compact-mode .node-title {
+            font-size: 1.1em;
+        }
+
+        .compact-mode .accounts-grid {
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 10px;
+            padding: 15px;
+            max-height: 300px;
+        }
+
+        .compact-mode .account-card {
+            padding: 10px;
+            font-size: 11px;
+        }
+
+        .compact-mode .account-header {
+            margin-bottom: 8px;
+        }
+
+        .compact-mode .account-name {
+            font-size: 12px;
+        }
+
+        .compact-mode .progress-bar {
+            height: 4px;
+        }
+
+        .compact-mode .detail-row {
+            font-size: 10px;
+            margin-bottom: 4px;
+        }
+
+        .compact-mode .token-name {
+            font-size: 9px;
+            padding: 1px 6px;
+        }
+
+        /* 响应式设计 */
+        @media (max-width: 768px) {
+            .node-stats-grid {
+                grid-template-columns: 1fr;
+                gap: 15px;
+            }
+
+            .global-controls {
+                flex-direction: column;
+                align-items: stretch;
+                gap: 8px;
+            }
+
+            .global-controls input,
+            .global-controls select,
+            .global-controls button {
+                width: 100%;
+            }
+
+            .accounts-grid {
+                grid-template-columns: 1fr;
+                padding: 15px;
+            }
+
+            .account-card {
+                padding: 12px;
+            }
+
+            .node-info {
+                grid-template-columns: repeat(2, 1fr);
+                gap: 10px;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .node-stat-card {
+                padding: 15px;
+                margin: 0 10px;
+            }
+
+            .node-title {
+                font-size: 1.1em;
+            }
+
+            .info-item {
+                padding: 8px;
+            }
+
+            .info-value {
+                font-size: 14px;
+            }
+
+            .account-card {
+                padding: 10px;
+            }
+
+            .account-name {
+                font-size: 12px;
+            }
+
+            .detail-row {
+                font-size: 11px;
+            }
+        }
+
+
+
+        /* 🔧 新增：警告状态样式 */
+        .node-status.online.warning {
+            background: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeaa7;
+        }
+
+        /* 🔧 新增：空闲状态样式 */
+        .node-status.online.idle {
+            background: #e2e3e5;
+            color: #6c757d;
+            border: 1px solid #ced4da;
+        }
+
+        /* 🔧 新增：异常状态样式 */
+        .node-status.offline.abnormal {
+            background: #dc3545;
+            color: white;
+            animation: status-blink 1s infinite;
+        }
+
+        /* 🔧 修改：离线状态改为空闲样式 */
+        .node-status.offline.idle {
+            background: #e2e3e5;
+            color: #6c757d;
+            border: 1px solid #ced4da;
+        }
+
+        @keyframes status-blink {
+            0%, 50% { opacity: 1; }
+            51%, 100% { opacity: 0.7; }
+        }
+
+        .accounts-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 15px;
+        }
+
+        .account-card {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 15px;
+            border-left: 4px solid #6c757d;
+        }
+
+        .account-card.running {
+            border-left-color: #28a745;
+            background: linear-gradient(135deg, #d4edda 0%, #ffffff 100%);
+            animation: pulse 2s infinite;
+        }
+
+        .account-card.idle {
+            border-left-color: #6c757d;
+            background: linear-gradient(135deg, #f8f9fa 0%, #ffffff 100%);
+        }
+
+        .account-name {
+            font-weight: bold;
+            color: #2c3e50;
+            margin-bottom: 8px;
+        }
+
+        .account-status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+
+        .status-indicator {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+        }
+
+        .status-indicator.running {
+            background: #28a745;
+            animation: blink 1s infinite;
+        }
+
+        .status-indicator.idle {
+            background: #6c757d;
+        }
+
+        .account-details {
+            font-size: 0.9em;
+            color: #6c757d;
+            margin-bottom: 10px;
+        }
+
+        .account-actions {
+            display: flex;
+            gap: 8px;
+            margin-top: 10px;
+            flex-wrap: wrap;
+        }
+
+        /* 🔧 新增：全局自动重启控制样式 */
+        .global-auto-restart-container {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 20px;
+            margin: 20px 0;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            border: 2px solid #e3f2fd;
+        }
+
+        .global-auto-restart {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .restart-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .global-restart-label {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            cursor: pointer;
+            font-size: 1.1em;
+            font-weight: 600;
+        }
+
+        .global-restart-label input[type="checkbox"] {
+            width: 20px;
+            height: 20px;
+            cursor: pointer;
+        }
+
+        .global-restart-text {
+            color: #2c3e50;
+        }
+
+        .global-restart-status {
+            font-size: 0.9em;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-weight: 500;
+            background: #e9ecef;
+            color: #6c757d;
+        }
+
+        .global-restart-status.enabled {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .restart-description {
+            color: #6c757d;
+            font-style: italic;
+        }
+
+        .restart-stats {
+            color: #495057;
+            font-weight: 500;
+        }
+
+        /* 🔧 新增：累积统计样式 */
+        .cumulative-stats {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 6px;
+            padding: 10px;
+            margin-bottom: 8px;
+        }
+
+        .stats-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 4px;
+            font-size: 0.9em;
+        }
+
+        .stats-row:last-child {
+            margin-bottom: 0;
+        }
+
+        .highlight {
+            color: #007bff;
+            font-weight: bold;
+        }
+
+        .completion-rate {
+            color: #28a745;
+            font-weight: bold;
+        }
+
+        .restart-badge {
+            background: #ffc107;
+            color: #212529;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 0.8em;
+            font-weight: bold;
+        }
+
+        .btn {
+            padding: 6px 12px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.8em;
+            transition: all 0.3s ease;
+        }
+
+        .btn-primary {
+            background: #007bff;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #0056b3;
+        }
+
+        .btn-success {
+            background: #28a745;
+            color: white;
+        }
+
+        .btn-success:hover {
+            background: #1e7e34;
+        }
+
+        .btn-warning {
+            background: #ffc107;
+            color: #212529;
+        }
+
+        .btn-warning:hover {
+            background: #e0a800;
+        }
+
+        .btn-danger {
+            background: #dc3545;
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background: #c82333;
+        }
+
+        .account-card.expired {
+            border-left-color: #dc3545;
+            background: linear-gradient(135deg, #f8d7da 0%, #ffffff 100%);
+            animation: pulse-red 2s infinite;
+        }
+
+        .account-card.warning {
+            border-left-color: #ffc107;
+            background: linear-gradient(135deg, #fff3cd 0%, #ffffff 100%);
+        }
+
+        .account-card.abnormal {
+            border-left-color: #dc3545;
+            background: linear-gradient(135deg, #fff5f5 0%, #ffffff 100%);
+            animation: abnormal-pulse 2s infinite;
+            box-shadow: 0 0 10px rgba(220, 53, 69, 0.3);
+        }
+
+        @keyframes abnormal-pulse {
+            0%, 100% {
+                box-shadow: 0 0 10px rgba(220, 53, 69, 0.3);
+                border-left-color: #dc3545;
+            }
+            50% {
+                box-shadow: 0 0 20px rgba(220, 53, 69, 0.6);
+                border-left-color: #ff1744;
+            }
+        }
+
+        /* 🔧 新增：模态框样式 */
+        .modal {
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(5px);
+            animation: fadeIn 0.3s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        .modal-content {
+            background-color: #fff;
+            margin: 5% auto;
+            padding: 0;
+            border-radius: 15px;
+            width: 90%;
+            max-width: 800px;
+            max-height: 80vh;
+            overflow: hidden;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            animation: slideIn 0.3s ease;
+        }
+
+        @keyframes slideIn {
+            from { transform: translateY(-50px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+
+        .modal-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .modal-header h2 {
+            margin: 0;
+            font-size: 1.5em;
+        }
+
+        .close {
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: color 0.3s;
+        }
+
+        .close:hover {
+            color: #ffeb3b;
+        }
+
+        .modal-body {
+            padding: 20px;
+            max-height: 60vh;
+            overflow-y: auto;
+        }
+
+        .modal-footer {
+            background: #f8f9fa;
+            padding: 15px 20px;
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+            border-top: 1px solid #dee2e6;
+        }
+
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s ease;
+        }
+
+        .btn-primary {
+            background: #007bff;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #0056b3;
+            transform: translateY(-1px);
+        }
+
+        .btn-secondary {
+            background: #6c757d;
+            color: white;
+        }
+
+        .btn-secondary:hover {
+            background: #545b62;
+        }
+
+        /* 详情内容样式 */
+        .details-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .details-section {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 15px;
+            border-left: 4px solid #007bff;
+        }
+
+        .details-section h3 {
+            margin: 0 0 15px 0;
+            color: #2c3e50;
+            font-size: 1.1em;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .details-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 0;
+            border-bottom: 1px solid #e9ecef;
+        }
+
+        .details-item:last-child {
+            border-bottom: none;
+        }
+
+        .details-label {
+            font-weight: bold;
+            color: #495057;
+        }
+
+        .details-value {
+            color: #6c757d;
+            text-align: right;
+            font-family: monospace;
+        }
+
+        .status-badge {
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+
+        .status-badge.running { background: #d4edda; color: #155724; }
+        .status-badge.abnormal { background: #f8d7da; color: #721c24; }
+        .status-badge.idle { background: #e2e3e5; color: #495057; }
+        .status-badge.expired { background: #f8d7da; color: #721c24; }
+        .status-badge.warning { background: #fff3cd; color: #856404; }
+
+        .expire-info {
+            font-size: 0.8em;
+            margin-top: 5px;
+        }
+
+        .expire-info.expired {
+            color: #dc3545;
+            font-weight: bold;
+        }
+
+        .expire-info.warning {
+            color: #856404;
+            font-weight: bold;
+        }
+
+        .expire-info.normal {
+            color: #6c757d;
+        }
+
+        .task-form {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            padding: 15px;
+            margin-top: 10px;
+            display: none;
+        }
+
+        .task-form.show {
+            display: block;
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: #495057;
+        }
+
+        .form-group input,
+        .form-group select {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+
+        .form-group input:focus,
+        .form-group select:focus {
+            outline: none;
+            border-color: #80bdff;
+            box-shadow: 0 0 0 0.2rem rgba(0, 123, 255, 0.25);
+        }
+
+        .form-actions {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+        }
+
+        .no-data {
+            text-align: center;
+            padding: 40px;
+            color: #6c757d;
+            font-size: 1.1em;
+        }
+
+        /* 🔧 新增：空闲数据样式 */
+        .no-data.idle {
+            color: #6c757d;
+            font-style: italic;
+            background: #f8f9fa;
+            border: 1px dashed #dee2e6;
+            border-radius: 8px;
+        }
+
+
+
+        @keyframes pulse-red {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.4); }
+            50% { box-shadow: 0 0 0 10px rgba(220, 53, 69, 0); }
+        }
+
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(40, 167, 69, 0.4); }
+            70% { box-shadow: 0 0 0 10px rgba(40, 167, 69, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(40, 167, 69, 0); }
+        }
+
+        @keyframes blink {
+            0%, 50% { opacity: 1; }
+            51%, 100% { opacity: 0.3; }
+        }
+
+        /* 响应式设计 */
+        @media (max-width: 768px) {
+            .navbar {
+                flex-direction: column;
+                gap: 15px;
+                padding: 20px;
+            }
+
+            .nav-links {
+                flex-wrap: wrap;
+                justify-content: center;
+                gap: 10px;
+            }
+
+            .nav-btn {
+                font-size: 12px;
+                padding: 6px 12px;
+            }
+
+            .container {
+                padding: 20px;
+                margin: 10px;
+            }
+
+            .header h1 {
+                font-size: 2em;
+            }
+
+            .stats-summary {
+                grid-template-columns: repeat(2, 1fr);
+            }
+
+            .accounts-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- 导航栏 -->
+    <div class="navbar">
+        <div class="nav-brand">🚀 Alpha Auto-Sell Bot</div>
+        <div class="nav-links">
+            <a href="/" class="nav-btn">🏠 首页</a>
+            <a href="/universal-management" class="nav-btn">🎛️ 通用管理</a>
+            <a href="/account-status" class="nav-btn active">📊 状态监控</a>
+            <a href="/flash-trade" class="nav-btn">⚡ Flash Trade</a>
+            <button class="nav-btn" onclick="refreshData()" style="background: #28a745; color: white;">🔄 刷新数据</button>
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="header">
+            <h1>📊 账号实时监控</h1>
+            <p>实时显示每个节点下账号的运行状态</p>
+            <div style="margin-top: 10px; padding: 8px 16px; background: rgba(255,255,255,0.2); border-radius: 20px; display: inline-block;">
+                <small style="color: rgba(255,255,255,0.9);">
+                    📅 最后更新: <span id="lastUpdateTime">加载中...</span>
+                </small>
+            </div>
+        </div>
+
+        <div class="stats-summary" id="statsSummary">
+            <!-- 统计卡片将通过JavaScript生成 -->
+        </div>
+
+        <!-- 🔧 新增：全局自动重启控制 -->
+        <div class="global-auto-restart-container">
+            <div class="global-auto-restart">
+                <div class="restart-header">
+                    <label class="global-restart-label">
+                        <input type="checkbox" id="global-auto-restart"
+                               onchange="toggleGlobalAutoRestart(this.checked)">
+                        <span class="global-restart-text">🔄 全局自动重启</span>
+                    </label>
+                    <div class="global-restart-status" id="global-restart-status">未启用</div>
+                </div>
+                <div class="restart-description">
+                    <small>启用后，所有账号超过8分钟无下单将自动重启，等待3分钟后重新开始任务</small>
+                </div>
+                <div class="restart-stats" id="restart-stats" style="display: none;">
+                    <small>监控中的账号: <span id="monitoring-count">0</span> 个</small>
+                </div>
+            </div>
+        </div>
+
+        <!-- 🔧 新增：筛选器 -->
+        <div class="filters-container" style="background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); border-radius: 15px; padding: 20px; margin: 20px 0; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);">
+            <h3 style="margin: 0 0 15px 0; color: #2c3e50;">🔍 筛选器</h3>
+            <div class="filter-row" style="display: flex; gap: 15px; flex-wrap: wrap; align-items: end;">
+                <div class="filter-group" style="display: flex; flex-direction: column; min-width: 150px;">
+                    <label style="font-weight: bold; margin-bottom: 5px; color: #555;">状态筛选</label>
+                    <select id="statusFilter" onchange="applyFilters()" style="padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px;">
+                        <option value="">所有状态</option>
+                        <option value="running">🔄 交易中</option>
+                        <option value="abnormal">❌ 异常 (8分钟+无下单)</option>
+                        <option value="idle">💤 待机</option>
+                        <option value="expired">💀 已过期</option>
+                        <option value="warning">⚠️ 即将过期</option>
+                    </select>
+                </div>
+                <div class="filter-group" style="display: flex; flex-direction: column; min-width: 150px;">
+                    <label style="font-weight: bold; margin-bottom: 5px; color: #555;">活跃度筛选</label>
+                    <select id="timeFilter" onchange="applyFilters()" style="padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px;">
+                        <option value="">所有活跃度</option>
+                        <option value="recent">🟢 最近活跃 (5分钟内)</option>
+                        <option value="normal">🟡 正常活跃 (5-8分钟)</option>
+                        <option value="delayed">🟠 延迟活跃 (8-30分钟)</option>
+                        <option value="inactive">🔴 长时间无活跃 (30分钟+)</option>
+                        <option value="never">⚫ 从未活跃</option>
+                    </select>
+                </div>
+                <div class="filter-group" style="display: flex; flex-direction: column; min-width: 150px;">
+                    <label style="font-weight: bold; margin-bottom: 5px; color: #555;">节点筛选</label>
+                    <select id="nodeFilter" onchange="applyFilters()" style="padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px;">
+                        <option value="">所有节点</option>
+                    </select>
+                </div>
+                <div class="filter-group" style="display: flex; flex-direction: column; min-width: 200px;">
+                    <label style="font-weight: bold; margin-bottom: 5px; color: #555;">搜索账号</label>
+                    <input type="text" id="searchFilter" placeholder="输入账号名称、ID或代币" oninput="applyFilters()" style="padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px;">
+                </div>
+                <div class="filter-group" style="display: flex; flex-direction: column;">
+                    <button onclick="clearFilters()" style="padding: 8px 16px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px;">清除筛选</button>
+                </div>
+            </div>
+            <div class="filter-stats" id="filterStats" style="margin-top: 15px; padding: 10px; background: #f8f9fa; border-radius: 8px; text-align: center; font-size: 14px; color: #6c757d;">
+                显示 <span id="filteredCount">0</span> / <span id="totalCount">0</span> 个账号
+            </div>
+        </div>
+
+        <!-- 🔧 新增：节点详细统计区域 -->
+        <div class="section" id="nodeStatsSection" style="margin-top: 30px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 15px;">
+                <h3 style="margin: 0; color: #2c3e50; font-size: 1.5em;">🖥️ 节点详细统计</h3>
+                <div class="global-controls" style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+                    <input type="text" id="accountSearchInput" placeholder="搜索账号..." style="padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; width: 180px; font-size: 14px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                    <select id="accountStatusFilter" style="padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                        <option value="">所有状态</option>
+                        <option value="active">循环中</option>
+                        <option value="idle">空闲</option>
+                    </select>
+                    <button class="btn btn-sm" onclick="toggleCompactMode()" style="background: linear-gradient(135deg, #17a2b8, #138496); color: white; padding: 8px 16px; border-radius: 6px; border: none; cursor: pointer; font-size: 14px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);" id="compactModeBtn">紧凑模式</button>
+                    <button class="btn btn-sm" onclick="toggleAllAccounts(true)" style="background: linear-gradient(135deg, #28a745, #20c997); color: white; padding: 8px 16px; border-radius: 6px; border: none; cursor: pointer; font-size: 14px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">全部展开</button>
+                    <button class="btn btn-sm" onclick="toggleAllAccounts(false)" style="background: linear-gradient(135deg, #6c757d, #5a6268); color: white; padding: 8px 16px; border-radius: 6px; border: none; cursor: pointer; font-size: 14px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">全部收起</button>
+                </div>
+            </div>
+            <div id="nodeStatsGrid" class="node-stats-grid"></div>
+        </div>
+
+
+    </div>
+
+    <!-- 🔧 新增：账号详情模态框 -->
+    <div id="accountDetailsModal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>📊 账号详情</h2>
+                <span class="close" onclick="closeDetailsModal()">&times;</span>
+            </div>
+            <div class="modal-body" id="accountDetailsContent">
+                <!-- 详情内容将通过JavaScript生成 -->
+            </div>
+            <div class="modal-footer">
+                <button onclick="refreshAccountDetails()" class="btn btn-primary">🔄 刷新数据</button>
+                <button onclick="closeDetailsModal()" class="btn btn-secondary">关闭</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let refreshInterval;
+        let allAccountsData = []; // 🔧 新增：存储所有账号数据
+        let filteredAccountsData = []; // 🔧 新增：存储筛选后的账号数据
+        let allNodesData = {}; // 🔧 新增：存储所有节点数据
+        let lastDataHash = ''; // 🔧 新增：用于检测数据变化
+
+        // 🔧 新增：节点状态缓存机制 - 防止频繁跳跃
+        let nodeStatusCache = {}; // 存储节点的历史状态信息
+
+        // 🔧 新增：Flash Trade 数据获取函数（提前定义）
+        async function fetchFlashStatsData() {
+            try {
+                const response = await fetch('/api/v1/flash-trade/realtime-stats');
+                const data = await response.json();
+
+                if (data.success) {
+                    const statsData = data.data || data;
+                    flashStatsData = statsData;
+                    window.flashStatsData = statsData; // 全局访问
+
+                    // 显示节点详细统计
+                    if (statsData.节点统计 && Object.keys(statsData.节点统计).length > 0) {
+                        if (typeof displayNodeStats === 'function') {
+                            displayNodeStats(statsData.节点统计);
+                        }
+                    } else {
+                        if (typeof showNoDataMessage === 'function') {
+                            showNoDataMessage();
+                        }
+                    }
+                } else {
+                    if (typeof showNoDataMessage === 'function') {
+                        showNoDataMessage();
+                    }
+                }
+            } catch (error) {
+                if (typeof showErrorMessage === 'function') {
+                    showErrorMessage(error.message);
+                }
+            }
+        }
+
+
+
+        // 🔧 新增：启动 Flash Trade 数据获取和节点详细统计（提前定义）
+        function startFlashDataFetch() {
+            // 检查页面元素
+            const nodeStatsGrid = document.getElementById('nodeStatsGrid');
+            if (!nodeStatsGrid) {
+                setTimeout(startFlashDataFetch, 1000);
+                return;
+            }
+
+            // 🔧 修复：不再单独获取数据，由 refreshData 统一处理
+            // fetchFlashStatsData(); // 注释掉，避免重复获取
+
+            // 绑定搜索和筛选事件
+            setTimeout(() => {
+                if (typeof bindAccountFilterEvents === 'function') {
+                    bindAccountFilterEvents();
+                }
+            }, 1000);
+
+            // 🔧 修复：不再设置单独的定时器，由 refreshData 统一处理
+            // setInterval(() => {
+            //     fetchFlashStatsData();
+            // }, 30000);
+        }
+
+        // 页面加载完成后初始化
+        document.addEventListener('DOMContentLoaded', function() {
+            // 🔧 修复：统一数据获取，避免冲突
+            refreshData(); // 立即获取一次数据
+            refreshInterval = setInterval(refreshData, 10000); // 每10秒刷新
+            startFlashDataFetch(); // 初始化页面元素和事件绑定
+
+            setTimeout(() => {
+                restoreFilterState();
+            }, 1000);
+        });
+
+        // 🔧 新增：网络重试机制
+        let retryCount = 0;
+        const maxRetries = 3;
+        let isRetrying = false;
+
+        // 🔧 保留：存储 Flash Trade 统计数据（用于节点卡片数据修正）
+        let flashStatsData = null;
+        let originalNodesData = null; // 保存原始节点数据
+
+        // 全局时间格式化函数
+        function formatUTC8Time(timestamp) {
+            if (!timestamp || timestamp <= 0) return '无';
+
+            const date = new Date(timestamp * 1000);
+            const utc8Date = new Date(date.getTime() + (8 * 60 * 60 * 1000));
+            const year = utc8Date.getUTCFullYear();
+            const month = String(utc8Date.getUTCMonth() + 1).padStart(2, '0');
+            const day = String(utc8Date.getUTCDate()).padStart(2, '0');
+            const hours = String(utc8Date.getUTCHours()).padStart(2, '0');
+            const minutes = String(utc8Date.getUTCMinutes()).padStart(2, '0');
+            const seconds = String(utc8Date.getUTCSeconds()).padStart(2, '0');
+            return `${year}/${month}/${day} ${hours}:${minutes}:${seconds}`;
+        }
+
+        // 刷新数据
+        async function refreshData() {
+            // 防止重复重试
+            if (isRetrying) {
+                return;
+            }
+
+            try {
+                // 显示加载状态（仅首次加载时）
+                if (retryCount === 0) {
+                    showLoadingState();
+                }
+
+                // 🔧 修改：只使用 Flash Trade 实时统计API的数据
+                const statsResponse = await fetchWithTimeout('/api/v1/flash-trade/realtime-stats', 10000);
+                const statsData = await statsResponse.json();
+
+                // 🔧 立即更新 flashStatsData 为最新数据
+                if (statsData.success) {
+                    const latestStatsData = statsData.data || statsData;
+                    const oldDataHash = flashStatsData ? JSON.stringify(flashStatsData).substring(0, 50) : 'null';
+                    flashStatsData = latestStatsData;
+                    window.flashStatsData = latestStatsData; // 全局访问
+
+                    // 调试日志
+                    console.log(`[${new Date().toLocaleTimeString()}] ✅ 只使用Flash Trade实时统计数据:`, {
+                        hasData: !!latestStatsData,
+                        nodeCount: latestStatsData?.节点统计 ? Object.keys(latestStatsData.节点统计).length : 0,
+                        dataSource: 'flash-trade-realtime-stats-only'
+                    });
+                }
+
+                // 🔧 只使用 Flash Trade 实时统计数据
+                if (statsData.success) {
+                    const realStatsData = statsData.data || statsData;
+
+                    // 直接使用 Flash Trade 实时统计数据
+                    updateDisplay(realStatsData, null, null);
+
+                    // 🔧 成功后重置重试计数和错误状态
+                    retryCount = 0;
+                    hideError();
+
+                    // 更新最后更新时间
+                    const lastUpdateElement = document.getElementById('lastUpdateTime');
+                    if (lastUpdateElement) {
+                        lastUpdateElement.textContent = new Date().toLocaleString('zh-CN');
+                    }
+
+                } else {
+                    throw new Error('Flash Trade 实时统计API返回数据格式错误');
+                }
+            } catch (error) {
+
+                await handleDataFetchError(error);
+            }
+        }
+
+        // 🔧 新增：带超时的fetch
+        function fetchWithTimeout(url, timeout = 10000) {
+            return Promise.race([
+                fetch(url),
+                new Promise((_, reject) =>
+                    setTimeout(() => reject(new Error('请求超时')), timeout)
+                )
+            ]);
+        }
+
+        // 🔧 新增：处理数据获取错误
+        async function handleDataFetchError(error) {
+            retryCount++;
+
+            if (retryCount <= maxRetries) {
+                isRetrying = true;
+                const retryDelay = Math.min(1000 * Math.pow(2, retryCount - 1), 5000); // 指数退避，最大5秒
+
+                showRetryMessage(retryCount, maxRetries, retryDelay);
+
+                setTimeout(async () => {
+                    isRetrying = false;
+                    await refreshData();
+                }, retryDelay);
+
+            } else {
+                // 超过最大重试次数，显示友好的错误信息
+                retryCount = 0;
+                isRetrying = false;
+                showFriendlyError(error);
+            }
+        }
+
+        // 更新显示 - 接收节点数据
+        function updateDisplay(statsData, accountsData, nodesData) {
+            // 调试日志
+            console.log(`[${new Date().toLocaleTimeString()}] updateDisplay 调用:`, {
+                hasStatsData: !!statsData,
+                hasAccountsData: !!accountsData,
+                hasNodesData: !!nodesData,
+                statsNodeCount: statsData?.节点统计 ? Object.keys(statsData.节点统计).length : 0
+            });
+
+            // 🔧 新增：定期清理过期的节点状态缓存
+            cleanupNodeStatusCache();
+
+            // 🔧 修改：合并实时统计、基础账号信息和节点信息
+            const combinedData = mergeAccountData(statsData, accountsData, nodesData);
+
+
+            // 🔧 新增：更新全局数据和筛选
+            updateGlobalData(combinedData);
+
+
+            updateStatsSummary(combinedData);
+
+
+            updateNodesGrid(combinedData);
+
+
+        }
+
+        // 🔧 新增：更新全局数据
+        function updateGlobalData(combinedData) {
+            // 提取所有账号数据
+            allAccountsData = [];
+            allNodesData = combinedData;
+
+            if (combinedData.节点统计) {
+                Object.entries(combinedData.节点统计).forEach(([nodeId, nodeData]) => {
+                    if (nodeData.账户统计) {
+                        Object.entries(nodeData.账户统计).forEach(([accountId, accountData]) => {
+                            allAccountsData.push({
+                                ...accountData,
+                                account_id: accountId,
+                                assigned_node: nodeId,
+                                节点ID: nodeId,
+                                账号ID: accountId
+                            });
+                        });
+                    }
+                });
+            }
+
+            // 更新节点筛选器选项
+            updateNodeFilterOptions();
+
+            // 如果是首次加载或没有筛选条件，显示所有数据
+            if (filteredAccountsData.length === 0) {
+                filteredAccountsData = [...allAccountsData];
+            }
+
+            // 应用当前筛选条件
+            applyFilters();
+        }
+
+        // 🔧 修改：更新节点筛选器选项，显示账户ID而不是节点ID
+        function updateNodeFilterOptions() {
+            const nodeFilter = document.getElementById('nodeFilter');
+            const currentValue = nodeFilter.value;
+
+            // 清空现有选项（保留"所有节点"）
+            nodeFilter.innerHTML = '<option value="">所有节点</option>';
+
+            // 🔧 使用Flash Trade数据中的节点信息
+            if (allNodesData && allNodesData.节点统计) {
+                Object.entries(allNodesData.节点统计).forEach(([nodeId, nodeData]) => {
+                    if (nodeId && nodeId !== 'unknown') {
+                        const option = document.createElement('option');
+                        option.value = nodeId;
+
+                        // 🔧 优先显示账户统计中的账户ID，和其他地方保持一致
+                        let displayName = nodeData.username || nodeData.friendly_name || nodeId;
+                        const accountStats = nodeData.账户统计 || {};
+
+                        if (accountStats && Object.keys(accountStats).length > 0) {
+                            const firstAccountKey = Object.keys(accountStats)[0];
+                            const firstAccount = accountStats[firstAccountKey];
+                            if (firstAccount && firstAccount.账户ID) {
+                                displayName = firstAccount.账户ID;
+                            }
+                        }
+
+                        option.textContent = displayName;
+                        nodeFilter.appendChild(option);
+
+                        console.log(`✅ 节点筛选器 ${nodeId} 显示名称: ${displayName}`);
+                    }
+                });
+            }
+
+            // 恢复之前的选择
+            if (currentValue) {
+                nodeFilter.value = currentValue;
+            }
+        }
+
+        // 修正 Flash Trade 数据中的账户ID
+        function correctAccountIds(flashStatsData, nodesData) {
+            const correctedData = JSON.parse(JSON.stringify(flashStatsData)); // 深拷贝
+
+            // 调试日志
+            console.log(`[${new Date().toLocaleTimeString()}] correctAccountIds:`, {
+                hasFlashData: !!flashStatsData,
+                hasNodesData: !!nodesData,
+                nodeCount: flashStatsData?.节点统计 ? Object.keys(flashStatsData.节点统计).length : 0
+            });
+
+            if (!nodesData || !nodesData.nodes) {
+                console.log('没有节点数据，返回原始数据');
+                return correctedData;
+            }
+
+            // 遍历每个节点，修正账户ID
+            Object.entries(correctedData.节点统计).forEach(([nodeId, nodeData]) => {
+                if (!nodeData.账户统计) return;
+
+                // 查找对应的 nodes 数据
+                const nodeInfo = nodesData.nodes[nodeId];
+                if (!nodeInfo || !nodeInfo.stats || !nodeInfo.stats.account_reports) return;
+
+                const accountReports = nodeInfo.stats.account_reports;
+                if (!Array.isArray(accountReports)) return;
+
+                // 创建新的账户统计对象
+                const newAccountStats = {};
+
+                // 遍历 account_reports 获取正确的账户ID
+                accountReports.forEach((account, index) => {
+                    const correctAccountId = account.account_id || account.name;
+                    if (!correctAccountId) return;
+
+                    // 查找对应的账户数据（可能使用 account_0, account_1 等键名）
+                    const accountKey = `account_${index}`;
+                    const oldAccountData = nodeData.账户统计[accountKey] || nodeData.账户统计[correctAccountId];
+
+                    if (oldAccountData) {
+                        // 使用正确的账户ID作为键名
+                        newAccountStats[correctAccountId] = {
+                            ...oldAccountData,
+                            账户ID: correctAccountId,
+                            账户名称: account.name || correctAccountId
+                        };
+                    }
+                });
+
+                // 替换账户统计数据
+                correctedData.节点统计[nodeId].账户统计 = newAccountStats;
+            });
+
+            return correctedData;
+        }
+
+        // 🔧 修改：只使用 Flash Trade 实时统计数据
+        function mergeAccountData(statsData, accountsData, nodesData) {
+            // 只使用 Flash Trade 实时统计数据
+            if (statsData && statsData.节点统计) {
+                // 调试日志
+                console.log(`[${new Date().toLocaleTimeString()}] 使用Flash Trade实时统计数据:`, {
+                    nodeCount: Object.keys(statsData.节点统计).length,
+                    dataSource: 'flash-trade-realtime-stats'
+                });
+
+                return {
+                    节点统计: statsData.节点统计,
+                    基础账号: {} // 不再使用其他数据源
+                };
+            }
+
+            // 如果没有 Flash Trade 数据，返回空结果
+            console.warn('没有Flash Trade实时统计数据');
+            return {
+                节点统计: {},
+                基础账号: {}
+            };
+        }
+
+        // 🔧 改进：智能更新统计摘要 - 只使用Flash Trade数据
+        function updateStatsSummary(data) {
+            const summary = document.getElementById('statsSummary');
+
+            // 🔧 修复：计算真实的节点和账户统计
+            const nodeStats = data.节点统计 || {};
+            const realNodeCount = Object.keys(nodeStats).length; // 实际节点数（包括在线和离线）
+            let realActiveAccounts = 0; // 实际活跃账户数
+            let totalAccounts = 0; // 总账户数
+            let runningAccounts = 0; // 运行中账户数
+
+            // 遍历所有节点统计真实的账户数据
+            Object.entries(nodeStats).forEach(([nodeId, node]) => {
+                if (node.账户统计) {
+                    const accounts = Object.values(node.账户统计);
+                    totalAccounts += accounts.length;
+
+                    let nodeRunningAccounts = 0;
+                    accounts.forEach(acc => {
+                        if (acc.是否循环中) {
+                            runningAccounts++;
+                            realActiveAccounts++; // 运行中的就是活跃的
+                            nodeRunningAccounts++;
+                        }
+                    });
+
+                }
+            });
+
+            // 🔧 新增：如果没有节点数据，显示警告
+            if (realNodeCount === 0) {
+                // 显示警告状态
+            }
+
+            // 🔧 优先使用Flash Trade全局汇总数据（仅用于任务统计）
+            if (data.全局汇总) {
+                const globalSummary = data.全局汇总;
+                const taskStats = globalSummary.任务状态统计 || {};
+
+                // 🔧 智能更新：使用真实统计数据
+                updateStatCard(summary, '总节点数', realNodeCount, realNodeCount === 0 ? 'error' : 'normal'); // 🔧 节点数为0时显示错误样式
+                updateStatCard(summary, '活跃账户', realActiveAccounts); // 🔧 使用真实活跃账户数
+                updateStatCard(summary, '总账户数', totalAccounts); // 🔧 新增总账户数
+                updateStatCard(summary, '运行中账户', runningAccounts); // 🔧 新增运行中账户数
+                updateStatCard(summary, '总任务数', taskStats.总任务数 || 0);
+                updateStatCard(summary, '已完成', taskStats.已完成 || 0);
+                updateStatCard(summary, '执行中', taskStats.执行中 || 0);
+                updateStatCard(summary, '当前交易量', (globalSummary.总当前交易量 || 0).toFixed(2));
+                updateStatCard(summary, '目标交易量', (globalSummary.总目标交易量 || 0).toFixed(2));
+                updateStatCard(summary, '总亏损 (USDT)', (globalSummary.总亏损 || 0).toFixed(4));
+                updateStatCard(summary, '完成率', (globalSummary.完成率 || 0).toFixed(1) + '%');
+                updateStatCard(summary, '失败任务', taskStats.已失败 || 0, (taskStats.已失败 || 0) > 0 ? 'error' : 'success');
+
+                // 如果统计卡片不存在，则创建完整的HTML
+                if (summary.children.length === 0) {
+                    summary.innerHTML = generateStatsSummaryHTML_Mixed(globalSummary, taskStats, {
+                        realNodeCount,
+                        realActiveAccounts,
+                        totalAccounts,
+                        runningAccounts
+                    });
+                }
+
+                return;
+            }
+
+            // 🔧 修复：回退逻辑也使用真实统计数据
+
+            let abnormalAccounts = 0;
+
+            // 检查异常账户
+            Object.values(nodeStats).forEach(node => {
+                if (node.账户统计) {
+                    const accounts = Object.values(node.账户统计);
+                    accounts.forEach(acc => {
+                        if (acc.是否循环中) {
+                            // 检查是否异常（超过8分钟无交易）
+                            const lastTradeTime = acc.last_trade_time || acc.最后交易时间;
+                            if (lastTradeTime) {
+                                const now = Math.floor(Date.now() / 1000);
+                                const minutesAgo = Math.floor((now - lastTradeTime) / 60);
+                                if (minutesAgo > 8) {
+                                    abnormalAccounts++;
+                                }
+                            } else {
+                                abnormalAccounts++; // 运行中但无交易记录
+                            }
+                        }
+                    });
+                }
+            });
+
+            summary.innerHTML = `
+                <div class="stat-card">
+                    <div class="stat-number">${realNodeCount}</div>
+                    <div class="stat-label">总节点数</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">${realActiveAccounts}</div>
+                    <div class="stat-label">活跃账户</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">${totalAccounts}</div>
+                    <div class="stat-label">总账户数</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">${runningAccounts}</div>
+                    <div class="stat-label">运行中账户</div>
+                </div>
+                <div class="stat-card" style="background: ${abnormalAccounts > 0 ? 'linear-gradient(135deg, #dc3545 0%, #c82333 100%)' : 'linear-gradient(135deg, #28a745 0%, #20c997 100%)'};">
+                    <div class="stat-number">${abnormalAccounts}</div>
+                    <div class="stat-label">异常账户</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">${totalAccounts - runningAccounts}</div>
+                    <div class="stat-label">空闲账户</div>
+                </div>
+            `;
+        }
+
+        // 🔧 改进：智能更新单个统计卡片 - 支持新旧两种结构
+        function updateStatCard(container, title, value, style = 'normal') {
+            // 查找对应的统计卡片
+            const cards = container.querySelectorAll('.stat-card');
+            let targetCard = null;
+
+            for (let card of cards) {
+                // 🔧 支持新结构：查找 stat-label
+                const statLabel = card.querySelector('.stat-label');
+                if (statLabel && statLabel.textContent.trim() === title) {
+                    targetCard = card;
+                    break;
+                }
+
+                // 🔧 支持旧结构：查找 h3
+                const h3 = card.querySelector('h3');
+                if (h3 && h3.textContent.trim() === title) {
+                    targetCard = card;
+                    break;
+                }
+            }
+
+            if (targetCard) {
+                // 🔧 更新现有卡片的数值 - 支持新旧两种结构
+                let numberDiv = targetCard.querySelector('.stat-number'); // 新结构
+                if (!numberDiv) {
+                    numberDiv = targetCard.querySelector('.number'); // 旧结构
+                }
+
+                if (numberDiv && numberDiv.textContent !== value.toString()) {
+                    numberDiv.textContent = value;
+
+                    // 添加更新动画效果
+                    numberDiv.style.animation = 'none';
+                    setTimeout(() => {
+                        numberDiv.style.animation = 'stat-update 0.3s ease-in-out';
+                    }, 10);
+                }
+
+                // 更新样式
+                if (style === 'error') {
+                    targetCard.style.background = 'linear-gradient(135deg, #dc3545 0%, #c82333 100%)';
+                } else if (style === 'success') {
+                    targetCard.style.background = 'linear-gradient(135deg, #28a745 0%, #20c997 100%)';
+                } else {
+                    targetCard.style.background = 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)';
+                }
+            }
+        }
+
+        // 🔧 修改：生成与nodes页面一致的统计摘要HTML
+        function generateStatsSummaryHTML_Mixed(globalSummary, taskStats, realStats) {
+            return `
+                <div class="stat-card" style="background: ${realStats.realNodeCount === 0 ? 'linear-gradient(135deg, #dc3545 0%, #c82333 100%)' : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)'};">
+                    <div class="stat-number">${realStats.realNodeCount}</div>
+                    <div class="stat-label">总节点数${realStats.realNodeCount === 0 ? ' (无节点)' : ''}</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">${realStats.realActiveAccounts}</div>
+                    <div class="stat-label">活跃账户</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">${realStats.totalAccounts}</div>
+                    <div class="stat-label">总账户数</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">${taskStats.总任务数 || 0}</div>
+                    <div class="stat-label">总任务数</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">${taskStats.已完成 || 0}</div>
+                    <div class="stat-label">已完成</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">${taskStats.执行中 || 0}</div>
+                    <div class="stat-label">执行中</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">${(globalSummary.总当前交易量 || 0).toFixed(2)}</div>
+                    <div class="stat-label">当前交易量</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">${(globalSummary.总目标交易量 || 0).toFixed(2)}</div>
+                    <div class="stat-label">目标交易量</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">${(globalSummary.总亏损 || 0).toFixed(4)}</div>
+                    <div class="stat-label">总亏损 (USDT)</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">${(globalSummary.完成率 || 0).toFixed(1)}%</div>
+                    <div class="stat-label">完成率</div>
+                </div>
+                <div class="stat-card" style="background: ${(taskStats.已失败 || 0) > 0 ? 'linear-gradient(135deg, #dc3545 0%, #c82333 100%)' : 'linear-gradient(135deg, #28a745 0%, #20c997 100%)'};">
+                    <div class="stat-number">${taskStats.已失败 || 0}</div>
+                    <div class="stat-label">失败任务</div>
+                </div>
+            `;
+        }
+
+        // 🔧 修改：生成与nodes页面一致的统计摘要HTML（向后兼容）
+        function generateStatsSummaryHTML(globalSummary, taskStats) {
+            return `
+                <div class="stat-card">
+                    <div class="stat-number">${globalSummary.总节点数 || 0}</div>
+                    <div class="stat-label">总节点数</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">${globalSummary.活跃账户数 || 0}</div>
+                    <div class="stat-label">活跃账户</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">${taskStats.总任务数 || 0}</div>
+                    <div class="stat-label">总任务数</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">${taskStats.已完成 || 0}</div>
+                    <div class="stat-label">已完成</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">${taskStats.执行中 || 0}</div>
+                    <div class="stat-label">执行中</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">${(globalSummary.总当前交易量 || 0).toFixed(2)}</div>
+                    <div class="stat-label">当前交易量</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">${(globalSummary.总目标交易量 || 0).toFixed(2)}</div>
+                    <div class="stat-label">目标交易量</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">${(globalSummary.总亏损 || 0).toFixed(4)}</div>
+                    <div class="stat-label">总亏损 (USDT)</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">${(globalSummary.完成率 || 0).toFixed(1)}%</div>
+                    <div class="stat-label">完成率</div>
+                </div>
+                <div class="stat-card" style="background: ${(taskStats.已失败 || 0) > 0 ? 'linear-gradient(135deg, #dc3545 0%, #c82333 100%)' : 'linear-gradient(135deg, #28a745 0%, #20c997 100%)'};">
+                    <div class="stat-number">${taskStats.已失败 || 0}</div>
+                    <div class="stat-label">失败任务</div>
+                </div>
+            `;
+        }
+
+        // 🔧 新增：根据运行中账号数量更新右上角刷新按钮状态
+        function updateRefreshButtonStatus(runningAccounts) {
+            const refreshButton = document.querySelector('button[onclick="refreshData()"]');
+            if (!refreshButton) return;
+
+            // 根据运行中账号数量确定状态
+            const isRunning = runningAccounts > 0;
+            const statusIcon = isRunning ? '🔥' : '💤';
+            const statusText = isRunning ? '运行中' : '空闲';
+
+            // 更新按钮文本和样式
+            refreshButton.textContent = `🔄 刷新数据 (${statusIcon} ${statusText})`;
+
+            if (isRunning) {
+                // 运行中状态：绿色背景，表示系统正常运行
+                refreshButton.style.background = '#28a745';
+                refreshButton.style.color = 'white';
+                refreshButton.style.animation = 'pulse 2s infinite';
+            } else {
+                // 空闲状态：灰色背景
+                refreshButton.style.background = '#6c757d';
+                refreshButton.style.color = 'white';
+                refreshButton.style.animation = 'none';
+            }
+        }
+
+        // 🔧 改进：智能更新节点网格 - 使用新的节点详细统计
+        function updateNodesGrid(data) {
+            // 🔧 修改：使用新的节点详细统计显示
+            if (typeof displayNodeStats === 'function' && data.节点统计) {
+                displayNodeStats(data.节点统计);
+                return;
+            }
+
+            // 🔧 回退：如果新函数不可用，尝试使用旧的grid元素
+            const grid = document.getElementById('nodeStatsGrid') || document.getElementById('nodesGrid');
+            if (!grid) {
+                return;
+            }
+
+            const nodeStats = data.节点统计 || {};
+
+            // 🔧 保存当前状态
+            const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+            const currentFilter = getCurrentFilterState();
+
+            if (Object.keys(nodeStats).length === 0) {
+                grid.innerHTML = '<div class="no-data">📭 暂无活跃节点</div>';
+                return;
+            }
+
+            // 🔧 检查是否需要完全重新渲染
+            const existingNodes = Array.from(grid.querySelectorAll('.node-card')).map(card =>
+                card.getAttribute('data-node-id')
+            );
+            const newNodes = Object.keys(nodeStats);
+            const needsFullRender = !arraysEqual(existingNodes.sort(), newNodes.sort());
+
+            if (needsFullRender) {
+                // 完全重新渲染
+                renderAllNodes(nodeStats, grid);
+            } else {
+                // 增量更新现有节点
+                updateExistingNodes(nodeStats, grid);
+            }
+
+            // 🔧 应用筛选（如果有的话）
+            applyCurrentFilter(currentFilter);
+
+            // 🔧 恢复滚动位置
+            setTimeout(() => {
+                window.scrollTo(0, scrollTop);
+            }, 0);
+        }
+
+        // 🔧 新增：获取当前筛选状态
+        function getCurrentFilterState() {
+            const statusFilter = document.getElementById('statusFilter');
+            const nodeFilter = document.getElementById('nodeFilter');
+            const searchInput = document.getElementById('searchInput');
+
+            return {
+                status: statusFilter ? statusFilter.value : '',
+                node: nodeFilter ? nodeFilter.value : '',
+                search: searchInput ? searchInput.value : ''
+            };
+        }
+
+        // 🔧 新增：应用当前筛选
+        function applyCurrentFilter(filterState) {
+            if (!filterState) return;
+
+            // 重新应用筛选逻辑
+            const cards = document.querySelectorAll('.node-card');
+            cards.forEach(card => {
+                const nodeId = card.getAttribute('data-node-id');
+                const shouldShow = shouldShowNode(nodeId, filterState);
+                card.style.display = shouldShow ? 'block' : 'none';
+            });
+        }
+
+        // 🔧 改进：判断节点是否应该显示（基于筛选条件）
+        function shouldShowNode(nodeId, filterState) {
+            if (!filterState) return true;
+
+            // 节点筛选
+            if (filterState.node && filterState.node !== nodeId) {
+                return false;
+            }
+
+            // 搜索筛选
+            if (filterState.search) {
+                const searchTerm = filterState.search.toLowerCase();
+                if (!nodeId.toLowerCase().includes(searchTerm)) {
+                    return false;
+                }
+            }
+
+            // 状态筛选 - 这里可以根据需要扩展
+            // 暂时不对节点级别应用状态筛选，因为状态筛选主要针对账户
+
+            return true;
+        }
+
+        // 🔧 修改：完全重新渲染所有节点 - 按异常>在线>离线排序
+        function renderAllNodes(nodeStats, grid) {
+            // 🔧 按状态优先级排序节点：异常 > 在线 > 离线
+            const sortedNodes = Object.entries(nodeStats).sort(([nodeIdA, nodeDataA], [nodeIdB, nodeDataB]) => {
+                const priorityA = getNodePriority(nodeDataA);
+                const priorityB = getNodePriority(nodeDataB);
+
+
+                // 优先级高的排前面（数字越小优先级越高）
+                if (priorityA !== priorityB) {
+                    return priorityA - priorityB;
+                }
+
+                // 优先级相同时按节点ID排序
+                return nodeIdA.localeCompare(nodeIdB);
+            });
+
+            let html = '';
+            sortedNodes.forEach(([nodeId, nodeData]) => {
+                html += generateNodeCard(nodeId, nodeData);
+            });
+
+            grid.innerHTML = html;
+        }
+
+        // 🔧 新增：增量更新现有节点
+        function updateExistingNodes(nodeStats, grid) {
+            Object.entries(nodeStats).forEach(([nodeId, nodeData]) => {
+                const existingCard = grid.querySelector(`[data-node-id="${nodeId}"]`);
+                if (existingCard) {
+                    // 更新现有节点卡片
+                    const newCardHtml = generateNodeCard(nodeId, nodeData);
+                    const tempDiv = document.createElement('div');
+                    tempDiv.innerHTML = newCardHtml;
+                    const newCard = tempDiv.firstElementChild;
+
+                    // 替换现有卡片
+                    existingCard.parentNode.replaceChild(newCard, existingCard);
+                }
+            });
+        }
+
+        // 🔧 新增：比较两个数组是否相等
+        function arraysEqual(a, b) {
+            if (a.length !== b.length) return false;
+            for (let i = 0; i < a.length; i++) {
+                if (a[i] !== b[i]) return false;
+            }
+            return true;
+        }
+
+        // 🔧 新增：生成数据哈希值用于检测变化
+        function generateDataHash(data) {
+            try {
+                return JSON.stringify(data).length.toString();
+            } catch (error) {
+                return Math.random().toString();
+            }
+        }
+
+        // 🔧 新增：清理过期的节点状态缓存
+        function cleanupNodeStatusCache() {
+            const now = Math.floor(Date.now() / 1000);
+            const maxAge = 10 * 60; // 10分钟
+
+            Object.keys(nodeStatusCache).forEach(nodeId => {
+                const cache = nodeStatusCache[nodeId];
+                const age = now - cache.lastStatusChange;
+
+                if (age > maxAge) {
+                    delete nodeStatusCache[nodeId];
+                }
+            });
+        }
+
+        // 🔧 修改：根据节点状态判断优先级（异常 > 在线 > 离线）
+        function getNodePriority(nodeData) {
+            const nodeId = nodeData.node_id || '未知节点';
+
+            // 检查节点的原始状态
+
+            // 首先判断节点基本状态
+            const isOffline = isNodeOffline(nodeData);
+
+
+            if (isOffline) {
+                // 离线节点 - 最低优先级
+                return 3;
+            }
+
+            // 🔧 修复：获取显示状态并确定优先级
+            const displayStatus = getNodeDisplayStatus(nodeData);
+
+            switch (displayStatus) {
+                case 'abnormal':
+                    return 1;  // 最高优先级 - 异常
+
+                case 'active':
+                    return 2;  // 第二优先级 - 活跃交易
+
+                case 'running':
+                    return 3;  // 第三优先级 - 有运行任务
+
+                case 'idle_with_accounts':
+                    return 4;  // 第四优先级 - 有账户但空闲
+
+                case 'idle_no_accounts':
+                    return 5;  // 第五优先级 - 无账户
+
+                case 'offline':
+                default:
+                    return 6;  // 最低优先级 - 离线
+            }
+        }
+
+        // 🔧 改进：稳定的节点状态判断 - 防止频繁跳跃
+        function isNodeOffline(nodeData) {
+            const nodeId = nodeData.node_id || '未知节点';
+            const now = Math.floor(Date.now() / 1000);
+
+            // 当前节点的实际状态
+            const currentlyOnline = nodeData.status === 'online';
+
+            // 初始化节点状态缓存
+            if (!nodeStatusCache[nodeId]) {
+                nodeStatusCache[nodeId] = {
+                    lastOnlineTime: currentlyOnline ? now : 0,
+                    lastOfflineTime: currentlyOnline ? 0 : now,
+                    stableStatus: currentlyOnline ? 'online' : 'offline',
+                    lastStatusChange: now
+                };
+            }
+
+            const cache = nodeStatusCache[nodeId];
+
+            // 更新最后在线/离线时间
+            if (currentlyOnline) {
+                cache.lastOnlineTime = now;
+            } else {
+                cache.lastOfflineTime = now;
+            }
+
+            // 🔧 核心逻辑：稳定状态判断
+            let newStableStatus = cache.stableStatus;
+
+            if (cache.stableStatus === 'online' && !currentlyOnline) {
+                // 当前显示在线，但实际离线
+                // 需要等待2分钟才切换到离线状态
+                const offlineDuration = now - cache.lastOfflineTime;
+                if (offlineDuration >= 120) { // 2分钟
+                    newStableStatus = 'offline';
+                } else {
+                }
+            } else if (cache.stableStatus === 'offline' && currentlyOnline) {
+                // 当前显示离线，但实际在线 - 立即切换到在线状态
+                newStableStatus = 'online';
+            }
+
+            // 更新稳定状态
+            if (newStableStatus !== cache.stableStatus) {
+                cache.stableStatus = newStableStatus;
+                cache.lastStatusChange = now;
+            }
+
+            const isOffline = cache.stableStatus === 'offline';
+
+
+            return isOffline;
+        }
+
+        // 🔧 新增：获取节点显示状态 - 与generateNodeCard中的逻辑保持一致
+        function getNodeDisplayStatus(nodeData) {
+            const nodeId = nodeData.node_id || '未知节点';
+            const isOffline = isNodeOffline(nodeData);
+
+
+            if (isOffline) {
+                return 'offline';
+            }
+
+            // 节点在线，检查账户活动情况
+            const accounts = nodeData.账户统计 || {};
+            let hasRunningAccounts = false;
+            let hasAbnormalAccounts = false;
+            let hasNormalActivity = false;
+            let totalAccounts = Object.keys(accounts).length;
+
+            // 检查所有账号的状态
+            Object.values(accounts).forEach(accountData => {
+                const isLooping = accountData.是否循环中 || accountData.is_looping || false;
+
+                if (isLooping) {
+                    hasRunningAccounts = true;
+
+                    // 检查是否异常（超过8分钟无交易）
+                    const lastTradeTime = accountData.last_trade_time || accountData.最后交易时间;
+                    if (lastTradeTime && lastTradeTime > 0) {
+                        const now = Math.floor(Date.now() / 1000);
+                        const minutesAgo = Math.floor((now - lastTradeTime) / 60);
+
+                        if (minutesAgo > 8) {
+                            hasAbnormalAccounts = true;
+                        } else {
+                            hasNormalActivity = true;
+                        }
+                    } else {
+                        hasAbnormalAccounts = true; // 运行中但无交易记录
+                    }
+                }
+            });
+
+            // 根据账户活动情况返回状态
+            if (hasAbnormalAccounts) {
+                return 'abnormal'; // 异常
+            } else if (hasRunningAccounts && hasNormalActivity) {
+                return 'active'; // 活跃交易
+            } else if (hasRunningAccounts) {
+                return 'running'; // 有运行任务
+            } else if (totalAccounts > 0) {
+                return 'idle_with_accounts'; // 有账户但空闲
+            } else {
+                return 'idle_no_accounts'; // 无账户
+            }
+        }
+
+        // 🔧 新增：获取账号优先级（异常 > 运行中 > 空闲）
+        function getAccountPriority(accountData, nodeData) {
+            const isRunning = accountData.是否循环中 || accountData.is_looping || false;
+
+            // 如果账号正在运行，检查是否异常
+            if (isRunning) {
+                const isAbnormal = isAccountAbnormal(accountData, nodeData);
+                if (isAbnormal) {
+                    return 1; // 最高优先级 - 异常状态
+                } else {
+                    return 2; // 第二优先级 - 运行中状态
+                }
+            } else {
+                return 3; // 最低优先级 - 空闲状态
+            }
+        }
+
+        // 生成节点卡片
+        function generateNodeCard(nodeId, nodeData) {
+            const accounts = nodeData.账户统计 || {};
+
+            // 🔧 使用统一的掉线检测函数
+            const isOffline = isNodeOffline(nodeData);
+            const isOnline = !isOffline;
+
+            let accountsHtml = '';
+            if (Object.keys(accounts).length === 0) {
+                // 🔧 修改：统一显示为空闲状态
+                accountsHtml = '<div class="no-data idle">💤 节点空闲</div>';
+            } else {
+                // 🔧 新增：按状态优先级排序账号（异常 > 运行中 > 空闲）
+                const sortedAccounts = Object.entries(accounts).sort(([accountIdA, accountDataA], [accountIdB, accountDataB]) => {
+                    const priorityA = getAccountPriority(accountDataA, nodeData);
+                    const priorityB = getAccountPriority(accountDataB, nodeData);
+
+                    // 优先级高的排前面（数字越小优先级越高）
+                    if (priorityA !== priorityB) {
+                        return priorityA - priorityB;
+                    }
+
+                    // 优先级相同时按账号ID排序
+                    return accountIdA.localeCompare(accountIdB);
+                });
+
+                sortedAccounts.forEach(([accountId, accountData]) => {
+                    accountsHtml += generateAccountCard(accountId, accountData);
+                });
+            }
+
+            // 🔧 简化：基于status字段的节点状态判断
+            let nodeCardClass = 'node-card';
+            let nodeStatusClass = 'online';
+            let nodeStatusText = '🟢 在线';
+
+            // 🔧 简化：直接根据status字段判断在线/离线状态
+            if (isOffline) {
+                nodeCardClass = 'node-card offline';
+                nodeStatusClass = 'offline';
+                nodeStatusText = '🔴 离线';
+            } else {
+                // 节点在线，根据账户活动情况细化显示状态
+                let hasRunningAccounts = false;
+                let hasAbnormalAccounts = false;
+                let hasNormalActivity = false;
+                let totalAccounts = Object.keys(accounts).length;
+
+                // 检查所有账号的状态
+                Object.values(accounts).forEach(accountData => {
+                    const isLooping = accountData.是否循环中 || accountData.is_looping || false;
+
+                    if (isLooping) {
+                        hasRunningAccounts = true;
+
+                        // 检查是否异常（超过8分钟无交易）
+                        const lastTradeTime = accountData.last_trade_time || accountData.最后交易时间;
+                        if (lastTradeTime && lastTradeTime > 0) {
+                            const now = Math.floor(Date.now() / 1000);
+                            const minutesAgo = Math.floor((now - lastTradeTime) / 60);
+
+                            if (minutesAgo > 8) {
+                                hasAbnormalAccounts = true;
+                            } else {
+                                hasNormalActivity = true;
+                            }
+                        } else {
+                            hasAbnormalAccounts = true; // 运行中但无交易记录
+                        }
+                    }
+                });
+
+                // 🔧 修改：根据账户活动情况设置节点显示状态和边框颜色
+                if (hasAbnormalAccounts) {
+                    nodeCardClass = 'node-card abnormal';  // 红色边框
+                    nodeStatusClass = 'online abnormal';
+                    nodeStatusText = '⚠️ 在线 (有异常账户)';
+                } else if (hasRunningAccounts && hasNormalActivity) {
+                    nodeCardClass = 'node-card online';    // 绿色边框
+                    nodeStatusClass = 'online active';
+                    nodeStatusText = '🔥 在线 (活跃交易)';
+                } else if (hasRunningAccounts) {
+                    nodeCardClass = 'node-card online';    // 绿色边框
+                    nodeStatusClass = 'online';
+                    nodeStatusText = '🟢 在线 (有运行任务)';
+                } else if (totalAccounts > 0) {
+                    nodeCardClass = 'node-card online';    // 绿色边框
+                    nodeStatusClass = 'online idle';
+                    nodeStatusText = '💤 在线 (有账户但空闲)';
+                } else {
+                    nodeCardClass = 'node-card online';    // 绿色边框
+                    nodeStatusClass = 'online idle';
+                    nodeStatusText = '💤 在线 (无账户)';
+                }
+
+            }
+
+            // 🔧 优先显示账户统计中的账户ID，和flash_trade页面保持一致
+            let displayNodeId = nodeData.username || nodeData.friendly_name || nodeId;
+            let nodeIcon = '🖥️';
+
+            // 如果有账户统计数据，优先显示第一个账户的账户ID
+            if (accounts && Object.keys(accounts).length > 0) {
+                const firstAccountKey = Object.keys(accounts)[0];
+                const firstAccount = accounts[firstAccountKey];
+                if (firstAccount && firstAccount.账户ID) {
+                    displayNodeId = firstAccount.账户ID;
+                    console.log(`✅ 节点 ${nodeId} 显示名称: ${displayNodeId} (来自账户统计)`);
+                }
+            }
+
+            if (nodeId === 'flash_trade_active_node') {
+                displayNodeId = 'Flash Trade 活跃节点';
+                nodeIcon = '⚡';
+            }
+
+            return `
+                <div class="${nodeCardClass}" data-node-id="${nodeId}">
+                    <div class="node-header">
+                        <div class="node-name">${nodeIcon} ${displayNodeId}</div>
+                        <div class="node-status ${nodeStatusClass}">
+                            ${nodeStatusText}
+                        </div>
+                    </div>
+                    <div class="accounts-grid">
+                        ${accountsHtml}
+                    </div>
+                </div>
+            `;
+        }
+
+        // 获取显示的账户名称
+        function getDisplayAccountName(accountId, accountData) {
+            // 如果有正确的账户名称，直接使用
+            if (accountData.账户名称 && accountData.账户名称 !== accountId) {
+                return accountData.账户名称;
+            }
+
+            // 如果 accountId 是 account_0 格式，尝试从原始节点数据中查找真实名称
+            if (accountId.match(/^account_\d+$/) && originalNodesData && originalNodesData.nodes) {
+                const accountIndex = parseInt(accountId.replace('account_', ''));
+
+                // 遍历所有节点查找对应的账户报告
+                for (const [nodeId, nodeInfo] of Object.entries(originalNodesData.nodes)) {
+                    if (nodeInfo.stats && nodeInfo.stats.account_reports && Array.isArray(nodeInfo.stats.account_reports)) {
+                        const accountReport = nodeInfo.stats.account_reports[accountIndex];
+                        if (accountReport && (accountReport.account_id || accountReport.name)) {
+                            return accountReport.account_id || accountReport.name;
+                        }
+                    }
+                }
+            }
+
+            // 回退到原始 accountId
+            return accountId;
+        }
+
+        // 生成账号卡片 - 完全使用 Flash Trade 数据
+        function generateAccountCard(accountId, accountData) {
+            const finalAccountData = accountData;
+            const isRunning = finalAccountData.是否循环中 || false;
+            const accountInfo = finalAccountData.账号信息 || {};
+
+
+
+            // 🔧 删除重复的函数定义，使用全局的 formatUTC8Time
+
+            // 🔧 使用统一的异常检测函数（连续8分钟没有下单显示异常）
+            const isAbnormal = isAccountAbnormal(finalAccountData);
+            let abnormalReason = '';
+            let lastTradeStatus = '正常';
+
+            if (isAbnormal) {
+                const lastTradeTime = accountData.last_trade_time || accountData.最后交易时间;
+                if (!lastTradeTime || lastTradeTime <= 0) {
+                    abnormalReason = '从未下单';
+                    lastTradeStatus = '异常';
+                } else {
+                    const now = Math.floor(Date.now() / 1000);
+                    const minutesAgo = Math.floor((now - lastTradeTime) / 60);
+                    abnormalReason = `已${minutesAgo}分钟无下单记录`;
+                    lastTradeStatus = '异常';
+                }
+            }
+
+            // 计算过期状态
+            const expireStatus = getExpireStatus(accountInfo);
+            let cardClass = isRunning ? 'running' : 'idle';
+            if (expireStatus.isExpired) cardClass += ' expired';
+            else if (expireStatus.isWarning) cardClass += ' warning';
+            if (isAbnormal) cardClass += ' abnormal';
+
+            const statusText = isAbnormal ? '❌ 异常' : (isRunning ? '🔥 运行中' : '💤 空闲');
+
+            // 🔧 修改：使用正确的最后交易时间字段
+            const startTime = formatUTC8Time(finalAccountData.任务开始时间 || accountInfo.created_at);
+
+            // 🔧 修改：优先使用 last_trade_time 字段
+            let lastTradeTime = '未知';
+            const lastTradeTimeValue = finalAccountData.last_trade_time || finalAccountData.最后交易时间;
+
+            if (lastTradeTimeValue && lastTradeTimeValue > 0) {
+                lastTradeTime = formatUTC8Time(lastTradeTimeValue);
+            }
+
+            // 🔧 新增：处理开始时间，优先使用服务开始时间
+            let startTime = '无';
+            const serviceStartTime = allNodesData?.全局统计?.服务开始时间 || allNodesData?.全局统计?.service_start_time;
+            const accountCreatedAt = finalAccountData.created_at;
+
+            if (serviceStartTime && serviceStartTime > 0) {
+                startTime = formatUTC8Time(serviceStartTime);
+            } else if (accountCreatedAt && accountCreatedAt > 0) {
+                startTime = formatUTC8Time(accountCreatedAt);
+            }
+
+            return `
+                <div class="account-card ${cardClass}" id="account-${accountId}">
+                    <div class="account-name">${getDisplayAccountName(accountId, finalAccountData)}</div>
+                    <div class="account-status">
+                        <div class="status-indicator ${isRunning ? 'running' : 'idle'}"></div>
+                        <span>${statusText}</span>
+                    </div>
+                    <div class="account-details">
+                        ${isRunning ? `
+                            <strong>总交易量:</strong> ${(finalAccountData.总交易量 || 0).toFixed(2)}<br>
+                            <strong>目标交易量:</strong> ${(finalAccountData.目标交易量 || 0).toFixed(2)}<br>
+                            <strong>交易次数:</strong> ${finalAccountData.交易次数 || 0}<br>
+                            <strong>总亏损:</strong> ${(finalAccountData.总亏损 || 0).toFixed(4)} USDT<br>
+                            <strong>总亏损率:</strong> ${(finalAccountData.总亏损率 || 0).toFixed(2)}‱<br>
+                            当前代币: ${finalAccountData.current_token || finalAccountData.当前代币 || '无'}<br>
+                            <strong>开始时间:</strong> ${startTime}<br>
+                            <strong>最后交易:</strong> ${lastTradeTime}
+                            ${isAbnormal ? `<br><span style="color: #dc3545; font-weight: bold;">⚠️ ${abnormalReason}</span>` : ''}
+                        ` : `
+                            等待任务分配<br>
+                            <strong>创建时间:</strong> ${startTime}
+                        `}
+                    </div>
+                    <div class="expire-info ${expireStatus.class}">
+                        ${expireStatus.text}
+                    </div>
+                    <div class="account-actions">
+                        ${generateActionButtons(accountId, accountData, accountInfo)}
+                    </div>
+                    <div class="task-form" id="taskForm-${accountId}">
+                        ${generateTaskForm(accountId)}
+                    </div>
+                </div>
+            `;
+        }
+
+        // 🔧 新增：生成累积统计显示
+        function generateCumulativeStatsDisplay(accountData) {
+            const cumulativeStats = accountData.cumulative_stats;
+
+            if (cumulativeStats) {
+                // 有累积统计数据
+                const originalVolume = cumulativeStats.original_volume || 0;
+                const totalCompleted = cumulativeStats.completed_volume || 0;  // 🔧 修复：直接使用后端计算的累积交易额
+                const restartCount = cumulativeStats.restart_count || 0;
+                const currentVolume = accountData.总交易量 || 0;
+
+                // 计算完成率
+                const completionRate = originalVolume > 0 ? (totalCompleted / originalVolume * 100) : 0;
+
+                return `
+                    <div class="cumulative-stats">
+                        <div class="stats-row">
+                            <strong>📊 累积统计</strong>
+                            ${restartCount > 0 ? `<span class="restart-badge">重启${restartCount}次</span>` : ''}
+                        </div>
+                        <div class="stats-row">
+                            总交易额: <span class="highlight">${totalCompleted.toFixed(2)}</span> / ${originalVolume.toFixed(2)}
+                        </div>
+                        <div class="stats-row">
+                            完成率: <span class="completion-rate">${completionRate.toFixed(1)}%</span>
+                        </div>
+                        ${restartCount > 0 ? `
+                        <div class="stats-row">
+                            历史完成: ${completedVolume.toFixed(2)} | 当前: ${currentVolume.toFixed(2)}
+                        </div>
+                        ` : ''}
+                    </div>
+                `;
+            } else {
+                // 没有累积统计数据，显示普通统计
+                const totalVolume = accountData.总交易量 || 0;
+                const targetVolume = accountData.目标交易量 || 0;
+                const completionRate = targetVolume > 0 ? (totalVolume / targetVolume * 100) : 0;
+
+                return `
+                    交易量: ${totalVolume.toFixed(2)} / ${targetVolume.toFixed(2)}<br>
+                    完成率: ${completionRate.toFixed(1)}%<br>
+                `;
+            }
+        }
+
+        // 获取过期状态
+        function getExpireStatus(accountInfo) {
+            if (!accountInfo.expires_at) {
+                return { isExpired: false, isWarning: false, class: 'normal', text: '无过期时间' };
+            }
+
+            const now = new Date();
+            const expiresAt = new Date(accountInfo.expires_at * 1000);
+            const timeDiff = expiresAt - now;
+            const daysDiff = Math.ceil(timeDiff / (1000 * 60 * 60 * 24));
+
+            if (timeDiff <= 0) {
+                return {
+                    isExpired: true,
+                    isWarning: false,
+                    class: 'expired',
+                    text: `⏰ 已过期 ${Math.abs(daysDiff)} 天`
+                };
+            } else if (daysDiff <= 1) {
+                return {
+                    isExpired: false,
+                    isWarning: true,
+                    class: 'warning',
+                    text: `⚠️ ${daysDiff} 天后过期`
+                };
+            } else {
+                return {
+                    isExpired: false,
+                    isWarning: false,
+                    class: 'normal',
+                    text: `✅ ${daysDiff} 天后过期`
+                };
+            }
+        }
+
+        // 生成操作按钮
+        function generateActionButtons(accountId, accountData, accountInfo) {
+            const isRunning = accountData.是否循环中 || false;
+            const expireStatus = getExpireStatus(accountInfo);
+
+            let buttons = '';
+
+            if (isRunning) {
+                buttons += `<button class="btn btn-warning" onclick="stopTask('${accountId}')">⏸️ 停止</button>`;
+            } else {
+                buttons += `<button class="btn btn-success" onclick="toggleTaskForm('${accountId}')">🚀 启动任务</button>`;
+            }
+
+            if (expireStatus.isExpired || expireStatus.isWarning) {
+                buttons += `<button class="btn btn-primary" onclick="renewAccount('${accountId}')">🔄 续期</button>`;
+            }
+
+            buttons += `<button class="btn btn-primary" onclick="viewDetails('${accountId}')">📊 详情</button>`;
+
+            // 🔧 新增：累积统计历史查看按钮
+            buttons += `<button class="btn btn-secondary" onclick="viewCumulativeHistory('${accountId}')">📈 历史</button>`;
+
+            return buttons;
+        }
+
+        // 生成任务表单
+        function generateTaskForm(accountId) {
+            return `
+                <div class="form-group">
+                    <label>代币地址:</label>
+                    <input type="text" name="token_address" placeholder="0x..." required>
+                </div>
+                <div class="form-group">
+                    <label>交易金额 (USDT):</label>
+                    <input type="number" name="usdt_amount" value="10" min="1" step="0.1" required>
+                </div>
+                <div class="form-group">
+                    <label>基础资产:</label>
+                    <input type="text" name="base_asset" placeholder="ALPHA_261" required>
+                </div>
+                <div class="form-group">
+                    <label>目标交易量:</label>
+                    <input type="number" name="target_volume" value="200" min="1" required>
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" name="auto_loop" checked> 自动循环
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label>价格精度:</label>
+                    <select name="price_precision">
+                        <option value="6">6位</option>
+                        <option value="8" selected>8位</option>
+                        <option value="10">10位</option>
+                    </select>
+                </div>
+                <div class="form-actions">
+                    <button type="button" class="btn btn-danger" onclick="toggleTaskForm('${accountId}')">取消</button>
+                    <button type="button" class="btn btn-success" onclick="submitTask('${accountId}')">启动</button>
+                </div>
+            `;
+        }
+
+        // 🔧 改进：显示加载状态 - 只在真正需要时显示
+        function showLoadingState() {
+            const summary = document.getElementById('statsSummary');
+            const grid = document.getElementById('nodesGrid');
+
+            // 只在容器为空时显示加载状态
+            if (summary && summary.children.length === 0) {
+                summary.innerHTML = `
+                    <div class="stat-card" style="grid-column: 1 / -1; text-align: center; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
+                        <div style="display: flex; align-items: center; justify-content: center; gap: 10px;">
+                            <div style="width: 20px; height: 20px; border: 2px solid rgba(255,255,255,0.3); border-top: 2px solid white; border-radius: 50%; animation: spin 1s linear infinite;"></div>
+                            <span style="color: white;">正在加载数据...</span>
+                        </div>
+                    </div>
+                `;
+            }
+
+            if (grid && grid.children.length === 0) {
+                grid.innerHTML = `
+                    <div style="grid-column: 1 / -1; text-align: center; padding: 40px; color: #6c757d;">
+                        <div style="display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 10px;">
+                            <div style="width: 20px; height: 20px; border: 2px solid #f3f3f3; border-top: 2px solid #007bff; border-radius: 50%; animation: spin 1s linear infinite;"></div>
+                            <span>正在连接服务器...</span>
+                        </div>
+                        <small>首次加载可能需要几秒钟</small>
+                    </div>
+                `;
+            }
+        }
+
+        // 🔧 新增：显示重试信息
+        function showRetryMessage(currentRetry, maxRetries, delay) {
+            const grid = document.getElementById('nodesGrid');
+            if (grid) {
+                grid.innerHTML = `
+                    <div style="grid-column: 1 / -1; text-align: center; padding: 40px; color: #ffc107;">
+                        <div style="display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 10px;">
+                            <div style="width: 20px; height: 20px; border: 2px solid #f3f3f3; border-top: 2px solid #ffc107; border-radius: 50%; animation: spin 1s linear infinite;"></div>
+                            <span>⚠️ 连接中断，正在重试...</span>
+                        </div>
+                        <div style="font-size: 14px; color: #6c757d;">
+                            第 ${currentRetry} / ${maxRetries} 次重试，${Math.ceil(delay/1000)} 秒后重新连接
+                        </div>
+                    </div>
+                `;
+            }
+        }
+
+        // 🔧 改进：显示友好的错误信息
+        function showFriendlyError(error) {
+            const grid = document.getElementById('nodesGrid');
+            const summary = document.getElementById('statsSummary');
+
+            let errorMessage = '服务暂时不可用';
+            let errorDetail = '请稍后重试或联系管理员';
+            let errorIcon = '🔌';
+
+            // 根据错误类型提供不同的提示
+            if (error.message.includes('Failed to fetch') || error.message.includes('请求超时')) {
+                errorMessage = '网络连接问题';
+                errorDetail = '请检查网络连接或稍后重试';
+                errorIcon = '🌐';
+            } else if (error.message.includes('服务器返回数据格式错误')) {
+                errorMessage = '数据格式异常';
+                errorDetail = '服务器可能正在维护，请稍后重试';
+                errorIcon = '⚙️';
+            } else if (error.message.includes('500')) {
+                errorMessage = '服务器内部错误';
+                errorDetail = '服务器遇到问题，请联系管理员';
+                errorIcon = '🔧';
+            }
+
+            const errorHtml = `
+                <div style="grid-column: 1 / -1; text-align: center; padding: 50px;">
+                    <div style="background: linear-gradient(135deg, #fff5f5 0%, #ffffff 100%); border: 2px solid #fecaca; border-radius: 15px; padding: 30px; max-width: 500px; margin: 0 auto;">
+                        <div style="font-size: 48px; margin-bottom: 15px;">${errorIcon}</div>
+                        <h3 style="color: #dc3545; margin-bottom: 10px;">${errorMessage}</h3>
+                        <p style="color: #6c757d; margin-bottom: 20px;">${errorDetail}</p>
+                        <div style="display: flex; gap: 10px; justify-content: center; flex-wrap: wrap;">
+                            <button onclick="manualRefresh()" style="padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; transition: all 0.3s;">
+                                🔄 立即重试
+                            </button>
+                            <button onclick="checkServerStatus()" style="padding: 10px 20px; background: #28a745; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; transition: all 0.3s;">
+                                🔍 检查状态
+                            </button>
+                        </div>
+                        <div style="margin-top: 15px; font-size: 12px; color: #6c757d;">
+                            <div>最后更新: ${new Date().toLocaleString()}</div>
+                            <div style="margin-top: 5px;">页面将在30秒后自动重试</div>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            if (grid) grid.innerHTML = errorHtml;
+
+            // 清空统计摘要或显示错误状态
+            if (summary) {
+                summary.innerHTML = `
+                    <div class="stat-card" style="grid-column: 1 / -1; text-align: center; background: #fff5f5; border: 1px solid #fecaca;">
+                        <div style="color: #dc3545;">⚠️ 数据获取失败</div>
+                        <small style="color: #6c757d;">显示的可能是缓存数据</small>
+                    </div>
+                `;
+            }
+
+            // 30秒后自动重试
+            setTimeout(() => {
+                refreshData();
+            }, 30000);
+        }
+
+        // 🔧 修复：隐藏错误信息和加载状态
+        function hideError() {
+            // 清除可能存在的加载状态和错误信息
+            const summary = document.getElementById('statsSummary');
+            const grid = document.getElementById('nodesGrid');
+
+            // 如果统计摘要只有一个加载状态卡片，清除它
+            if (summary && summary.children.length === 1) {
+                const loadingCard = summary.querySelector('.stat-card');
+                if (loadingCard && loadingCard.textContent.includes('正在加载数据')) {
+                    summary.innerHTML = '';
+                }
+            }
+
+            // 如果节点网格只有加载状态，清除它
+            if (grid && grid.children.length === 1) {
+                const loadingDiv = grid.firstElementChild;
+                if (loadingDiv && loadingDiv.textContent.includes('正在连接服务器')) {
+                    grid.innerHTML = '';
+                }
+            }
+        }
+
+        // 🔧 新增：手动刷新
+        function manualRefresh() {
+            retryCount = 0; // 重置重试计数
+            isRetrying = false;
+            refreshData();
+        }
+
+        // 🔧 新增：检查服务器状态
+        async function checkServerStatus() {
+            try {
+                showLoadingState();
+                const response = await fetch('/api/v1/health', {
+                    method: 'GET',
+                    cache: 'no-cache'
+                });
+
+                if (response.ok) {
+                    alert('✅ 服务器连接正常，正在重新加载数据...');
+                    manualRefresh();
+                } else {
+                    alert('⚠️ 服务器响应异常，请联系管理员');
+                }
+            } catch (error) {
+                alert('❌ 无法连接到服务器，请检查网络连接');
+            }
+        }
+
+        // 🔧 保留：向后兼容的错误显示函数
+        function showError(message) {
+            showFriendlyError(new Error(message));
+        }
+
+        // 任务管理函数
+        function toggleTaskForm(accountId) {
+            const form = document.getElementById(`taskForm-${accountId}`);
+            form.classList.toggle('show');
+        }
+
+        async function submitTask(accountId) {
+            const form = document.getElementById(`taskForm-${accountId}`);
+            const formData = new FormData();
+
+            // 收集表单数据
+            const inputs = form.querySelectorAll('input, select');
+            inputs.forEach(input => {
+                if (input.type === 'checkbox') {
+                    formData.append(input.name, input.checked);
+                } else {
+                    formData.append(input.name, input.value);
+                }
+            });
+
+            try {
+                const response = await fetch('/api/v1/flash-trade/start', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        node_id: '', // 所有节点
+                        account_id: accountId,
+                        token_address: formData.get('token_address'),
+                        usdt_amount: parseFloat(formData.get('usdt_amount')),
+                        base_asset: formData.get('base_asset'),
+                        target_volume: parseFloat(formData.get('target_volume')),
+                        auto_loop: formData.get('auto_loop') === 'true',
+                        price_precision: parseInt(formData.get('price_precision'))
+                    })
+                });
+
+                const result = await response.json();
+                if (result.success) {
+                    alert('✅ 任务启动成功！');
+                    toggleTaskForm(accountId);
+                    refreshData(); // 刷新数据
+                } else {
+                    alert('❌ 任务启动失败: ' + result.message);
+                }
+            } catch (error) {
+                alert('❌ 网络错误: ' + error.message);
+            }
+        }
+
+        async function stopTask(accountId) {
+            if (!confirm('确定要停止该账号的任务吗？')) return;
+
+            try {
+                const response = await fetch('/api/v1/flash-trade/stop', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        account_id: accountId
+                    })
+                });
+
+                const result = await response.json();
+                if (result.success) {
+                    alert('✅ 任务已停止！');
+                    refreshData(); // 刷新数据
+                } else {
+                    alert('❌ 停止失败: ' + result.message);
+                }
+            } catch (error) {
+                alert('❌ 网络错误: ' + error.message);
+            }
+        }
+
+        function renewAccount(accountId) {
+            alert('🔄 续期功能开发中...');
+            // TODO: 实现续期功能
+        }
+
+        // 🔧 实现：查看账号详情
+        function viewDetails(accountId) {
+
+            // 查找账号数据
+            const accountData = findAccountData(accountId);
+            if (!accountData) {
+                alert('❌ 未找到账号数据');
+                return;
+            }
+
+            // 显示详情模态框
+            showAccountDetailsModal(accountId, accountData);
+        }
+
+        // 🔧 新增：筛选功能
+        function applyFilters() {
+            if (!allAccountsData || allAccountsData.length === 0) {
+                updateFilterStats();
+                return;
+            }
+
+            const statusFilter = document.getElementById('statusFilter').value;
+            const timeFilter = document.getElementById('timeFilter').value;
+            const nodeFilter = document.getElementById('nodeFilter').value;
+            const searchFilter = document.getElementById('searchFilter').value.toLowerCase();
+
+            // 🔧 新增：保存筛选状态
+            saveFilterState();
+
+            filteredAccountsData = allAccountsData.filter(account => {
+                // 状态筛选
+                if (statusFilter) {
+                    const accountStatus = getAccountStatus(account);
+                    if (statusFilter === 'abnormal') {
+                        if (!isAccountAbnormal(account)) return false;
+                    } else if (accountStatus !== statusFilter) {
+                        return false;
+                    }
+                }
+
+                // 活跃度筛选
+                if (timeFilter) {
+                    const activityLevel = getActivityLevel(account);
+                    if (activityLevel !== timeFilter) return false;
+                }
+
+                // 节点筛选
+                if (nodeFilter) {
+                    const accountNode = account.assigned_node || account.节点ID || 'unknown';
+                    if (accountNode !== nodeFilter) return false;
+                }
+
+                // 搜索筛选
+                if (searchFilter) {
+                    const name = (account.name || account.账号名称 || '').toLowerCase();
+                    const id = (account.account_id || account.账号ID || '').toLowerCase();
+                    const token = (account.current_token || account.当前代币 || '').toLowerCase();
+
+                    if (!name.includes(searchFilter) &&
+                        !id.includes(searchFilter) &&
+                        !token.includes(searchFilter)) {
+                        return false;
+                    }
+                }
+
+                return true;
+            });
+
+            updateFilterStats();
+            displayFilteredData();
+        }
+
+        // 获取账号状态
+        function getAccountStatus(account) {
+            const now = Math.floor(Date.now() / 1000);
+            const isRunning = account.是否循环中 || account.is_looping;
+
+            // 检查过期状态（假设4.5天过期）
+            if (account.expires_at && account.expires_at < now) return 'expired';
+            if (account.expires_at && (account.expires_at - now) < 86400) return 'warning'; // 24小时内过期
+
+            if (isRunning) return 'running';
+            return 'idle';
+        }
+
+        // 🔧 修改：检查是否异常（超过8分钟无下单）- 直接使用账户数据中的最后交易时间
+        function isAccountAbnormal(account) {
+            const isRunning = account.是否循环中 || account.is_looping;
+            if (!isRunning) return false;
+
+            // 🔧 修改：优先使用 last_trade_time 字段
+            const lastTradeTime = account.last_trade_time || account.最后交易时间;
+            if (!lastTradeTime || lastTradeTime <= 0) return true;
+
+            const now = Math.floor(Date.now() / 1000);
+            const minutesAgo = Math.floor((now - lastTradeTime) / 60);
+            return minutesAgo > 8;
+        }
+
+        // 🔧 修改：获取活跃度级别 - 直接使用账户数据中的最后交易时间
+        function getActivityLevel(account) {
+            // 🔧 修改：优先使用 last_trade_time 字段
+            const lastTradeTime = account.last_trade_time || account.最后交易时间;
+            if (!lastTradeTime || lastTradeTime <= 0) return 'never';
+
+            const now = Math.floor(Date.now() / 1000);
+            const minutesAgo = Math.floor((now - lastTradeTime) / 60);
+
+            if (minutesAgo <= 5) return 'recent';
+            if (minutesAgo <= 8) return 'normal';
+            if (minutesAgo <= 30) return 'delayed';
+            return 'inactive';
+        }
+
+        // 更新筛选统计
+        function updateFilterStats() {
+            const totalCount = allAccountsData.length;
+            const filteredCount = filteredAccountsData.length;
+
+            document.getElementById('totalCount').textContent = totalCount;
+            document.getElementById('filteredCount').textContent = filteredCount;
+        }
+
+        // 显示筛选后的数据
+        function displayFilteredData() {
+            // 重新构建节点数据，只包含筛选后的账号
+            const filteredNodesData = {};
+
+            filteredAccountsData.forEach(account => {
+                const nodeId = account.assigned_node || account.节点ID || 'unknown';
+                if (!filteredNodesData[nodeId]) {
+                    filteredNodesData[nodeId] = {
+                        节点ID: nodeId,
+                        账户统计: {},
+                        is_realtime: allNodesData.节点统计 && allNodesData.节点统计[nodeId] ? allNodesData.节点统计[nodeId].is_realtime : false,
+                        data_age: allNodesData.节点统计 && allNodesData.节点统计[nodeId] ? allNodesData.节点统计[nodeId].data_age : 999
+                    };
+                }
+                filteredNodesData[nodeId].账户统计[account.account_id || account.账号ID] = account;
+            });
+
+            // 🔧 修改：使用新的节点详细统计显示
+            if (typeof displayNodeStats === 'function') {
+                displayNodeStats(filteredNodesData);
+            } else {
+                updateNodesDisplay({ 节点统计: filteredNodesData });
+            }
+        }
+
+        // 🔧 新增：更新节点显示（用于筛选后的数据）
+        function updateNodesDisplay(data) {
+            // 🔧 修复：使用新的节点详细统计区域
+            const grid = document.getElementById('nodeStatsGrid');
+            if (!grid) {
+                return;
+            }
+
+            const nodeStats = data.节点统计 || {};
+
+            if (Object.keys(nodeStats).length === 0) {
+                grid.innerHTML = '<div class="no-data">🔍 没有找到匹配的账号</div>';
+                return;
+            }
+
+            // 🔧 修改：使用新的节点详细统计显示方式
+            if (typeof displayNodeStats === 'function') {
+                displayNodeStats(nodeStats);
+            } else {
+                // 回退到旧的显示方式
+                let html = '';
+                Object.entries(nodeStats).forEach(([nodeId, nodeData]) => {
+                    // 只显示有账号的节点
+                    if (nodeData.账户统计 && Object.keys(nodeData.账户统计).length > 0) {
+                        html += generateNodeCard(nodeId, nodeData);
+                    }
+                });
+
+                if (html === '') {
+                    grid.innerHTML = '<div class="no-data">🔍 没有找到匹配的账号</div>';
+                } else {
+                    grid.innerHTML = html;
+                }
+            }
+        }
+
+        // 清除筛选
+        function clearFilters() {
+            document.getElementById('statusFilter').value = '';
+            document.getElementById('timeFilter').value = '';
+            document.getElementById('nodeFilter').value = '';
+            document.getElementById('searchFilter').value = '';
+
+            // 🔧 新增：清除保存的筛选状态
+            clearSavedFilterState();
+
+            filteredAccountsData = [...allAccountsData];
+            updateFilterStats();
+            displayFilteredData();
+        }
+
+        // 🔧 新增：保存筛选状态到localStorage
+        function saveFilterState() {
+            try {
+                const filterState = {
+                    statusFilter: document.getElementById('statusFilter').value,
+                    timeFilter: document.getElementById('timeFilter').value,
+                    nodeFilter: document.getElementById('nodeFilter').value,
+                    searchFilter: document.getElementById('searchFilter').value,
+                    timestamp: Date.now()
+                };
+
+                localStorage.setItem('accountStatusFilters', JSON.stringify(filterState));
+            } catch (error) {
+            }
+        }
+
+        // 🔧 新增：从localStorage恢复筛选状态
+        function restoreFilterState() {
+            try {
+                const savedState = localStorage.getItem('accountStatusFilters');
+                if (!savedState) {
+                    return;
+                }
+
+                const filterState = JSON.parse(savedState);
+
+                // 检查状态是否过期（24小时）
+                const maxAge = 24 * 60 * 60 * 1000; // 24小时
+                if (Date.now() - filterState.timestamp > maxAge) {
+                    localStorage.removeItem('accountStatusFilters');
+                    return;
+                }
+
+                // 恢复筛选条件
+                const statusFilter = document.getElementById('statusFilter');
+                const timeFilter = document.getElementById('timeFilter');
+                const nodeFilter = document.getElementById('nodeFilter');
+                const searchFilter = document.getElementById('searchFilter');
+
+                if (statusFilter && filterState.statusFilter) {
+                    statusFilter.value = filterState.statusFilter;
+                }
+                if (timeFilter && filterState.timeFilter) {
+                    timeFilter.value = filterState.timeFilter;
+                }
+                if (nodeFilter && filterState.nodeFilter) {
+                    nodeFilter.value = filterState.nodeFilter;
+                }
+                if (searchFilter && filterState.searchFilter) {
+                    searchFilter.value = filterState.searchFilter;
+                }
+
+
+                // 延迟应用筛选，确保数据已加载
+                setTimeout(() => {
+                    if (typeof applyFilters === 'function') {
+                        applyFilters();
+                    }
+                }, 2000);
+
+            } catch (error) {
+                // 清除损坏的状态
+                localStorage.removeItem('accountStatusFilters');
+            }
+        }
+
+        // 🔧 新增：清除保存的筛选状态
+        function clearSavedFilterState() {
+            try {
+                localStorage.removeItem('accountStatusFilters');
+            } catch (error) {
+            }
+        }
+
+        // 🔧 新增：查找账号数据
+        function findAccountData(accountId) {
+            // 从全局数据中查找账号
+            for (const account of allAccountsData) {
+                if (account.account_id === accountId || account.账号ID === accountId) {
+                    return account;
+                }
+            }
+
+            // 从节点数据中查找
+            if (allNodesData && allNodesData.节点统计) {
+                for (const [nodeId, nodeData] of Object.entries(allNodesData.节点统计)) {
+                    if (nodeData.账户统计 && nodeData.账户统计[accountId]) {
+                        return {
+                            ...nodeData.账户统计[accountId],
+                            account_id: accountId,
+                            assigned_node: nodeId,
+                            节点ID: nodeId,
+                            账号ID: accountId
+                        };
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        // 🔧 新增：显示账号详情模态框
+        function showAccountDetailsModal(accountId, accountData) {
+            const modal = document.getElementById('accountDetailsModal');
+            const content = document.getElementById('accountDetailsContent');
+
+            // 生成详情内容
+            content.innerHTML = generateAccountDetailsHTML(accountId, accountData);
+
+            // 显示模态框
+            modal.style.display = 'block';
+            document.body.style.overflow = 'hidden'; // 防止背景滚动
+
+            // 存储当前查看的账号ID，用于刷新
+            modal.dataset.currentAccountId = accountId;
+        }
+
+        // 🔧 新增：关闭详情模态框
+        function closeDetailsModal() {
+            const modal = document.getElementById('accountDetailsModal');
+            modal.style.display = 'none';
+            document.body.style.overflow = 'auto'; // 恢复背景滚动
+        }
+
+        // 🔧 新增：刷新账号详情
+        function refreshAccountDetails() {
+            const modal = document.getElementById('accountDetailsModal');
+            const accountId = modal.dataset.currentAccountId;
+
+            if (!accountId) {
+                alert('❌ 无法获取账号ID');
+                return;
+            }
+
+            // 重新获取账号数据
+            const accountData = findAccountData(accountId);
+            if (!accountData) {
+                alert('❌ 未找到账号数据');
+                return;
+            }
+
+            // 更新详情内容
+            const content = document.getElementById('accountDetailsContent');
+            content.innerHTML = generateAccountDetailsHTML(accountId, accountData);
+
+        }
+
+        // 🔧 新增：生成账号详情HTML
+        function generateAccountDetailsHTML(accountId, accountData) {
+            // 🔧 删除重复的函数定义，使用全局的 formatUTC8Time
+
+            // 获取账号状态信息
+            const isRunning = accountData.是否循环中 || accountData.is_looping || false;
+            const isAbnormal = isAccountAbnormal(accountData);
+            const activityLevel = getActivityLevel(accountData);
+
+            // 状态文本和样式
+            let statusText = '💤 待机';
+            let statusClass = 'idle';
+
+            if (isAbnormal) {
+                statusText = '❌ 异常';
+                statusClass = 'abnormal';
+            } else if (isRunning) {
+                statusText = '🔄 交易中';
+                statusClass = 'running';
+            }
+
+            // 计算完成率
+            const totalVolume = parseFloat(accountData.总交易量 || accountData.total_volume) || 0;
+            const targetVolume = parseFloat(accountData.目标交易量 || accountData.target_volume) || 0;
+            const completionRate = targetVolume > 0 ? (totalVolume / targetVolume * 100) : 0;
+
+            // 计算时间信息
+            const now = Math.floor(Date.now() / 1000);
+            const lastTradeTime = accountData.last_trade_time || accountData.最后交易时间 || 0;
+            const minutesAgo = lastTradeTime > 0 ? Math.floor((now - lastTradeTime) / 60) : null;
+
+            // 活跃度文本
+            const activityMap = {
+                'recent': '🟢 最近活跃 (5分钟内)',
+                'normal': '🟡 正常活跃 (5-8分钟)',
+                'delayed': '🟠 延迟活跃 (8-30分钟)',
+                'inactive': '🔴 长时间无活跃 (30分钟+)',
+                'never': '⚫ 从未活跃'
+            };
+
+            return `
+                <div class="details-grid">
+                    <!-- 基本信息 -->
+                    <div class="details-section">
+                        <h3>🏷️ 基本信息</h3>
+                        <div class="details-item">
+                            <span class="details-label">账号ID</span>
+                            <span class="details-value">${accountId}</span>
+                        </div>
+                        <div class="details-item">
+                            <span class="details-label">账号名称</span>
+                            <span class="details-value">${accountData.name || accountData.账号名称 || accountId}</span>
+                        </div>
+                        <div class="details-item">
+                            <span class="details-label">分配节点</span>
+                            <span class="details-value">${accountData.assigned_node || accountData.节点ID || '未分配'}</span>
+                        </div>
+                        <div class="details-item">
+                            <span class="details-label">当前状态</span>
+                            <span class="details-value"><span class="status-badge ${statusClass}">${statusText}</span></span>
+                        </div>
+                        <div class="details-item">
+                            <span class="details-label">活跃度</span>
+                            <span class="details-value">${activityMap[activityLevel] || '未知'}</span>
+                        </div>
+                    </div>
+
+                    <!-- 交易信息 -->
+                    <div class="details-section">
+                        <h3>💰 交易信息</h3>
+                        <div class="details-item">
+                            <span class="details-label">当前代币</span>
+                            <span class="details-value">${accountData.current_token || accountData.当前代币 || '无'}</span>
+                        </div>
+                        <div class="details-item">
+                            <span class="details-label">交易量</span>
+                            <span class="details-value">${totalVolume.toFixed(2)} USDT</span>
+                        </div>
+                        <div class="details-item">
+                            <span class="details-label">目标量</span>
+                            <span class="details-value">${targetVolume.toFixed(2)} USDT</span>
+                        </div>
+                        <div class="details-item">
+                            <span class="details-label">完成率</span>
+                            <span class="details-value">${completionRate.toFixed(1)}%</span>
+                        </div>
+                        <div class="details-item">
+                            <span class="details-label">交易次数</span>
+                            <span class="details-value">${accountData.交易次数 || accountData.trade_count || 0}</span>
+                        </div>
+                    </div>
+
+                    <!-- 损耗信息 -->
+                    <div class="details-section">
+                        <h3>📉 损耗信息</h3>
+                        <div class="details-item">
+                            <span class="details-label">总磨损</span>
+                            <span class="details-value">${(parseFloat(accountData.总亏损 || accountData.total_loss) || 0).toFixed(6)} USDT</span>
+                        </div>
+                        <div class="details-item">
+                            <span class="details-label">磨损率</span>
+                            <span class="details-value">${(parseFloat(accountData.总亏损率 || accountData.total_loss_rate) || 0).toFixed(2)}‱</span>
+                        </div>
+                        <div class="details-item">
+                            <span class="details-label">平均磨损</span>
+                            <span class="details-value">${accountData.交易次数 > 0 ? ((parseFloat(accountData.总亏损 || accountData.total_loss) || 0) / (accountData.交易次数 || 1)).toFixed(6) : '0.000000'} USDT/次</span>
+                        </div>
+                    </div>
+
+                    <!-- 时间信息 -->
+                    <div class="details-section">
+                        <h3>⏰ 时间信息</h3>
+                        <div class="details-item">
+                            <span class="details-label">开始时间</span>
+                            <span class="details-value">${formatUTC8Time(accountData.任务开始时间 || accountData.task_start_time || accountData.created_at)}</span>
+                        </div>
+                        <div class="details-item">
+                            <span class="details-label">最后交易</span>
+                            <span class="details-value">${formatUTC8Time(lastTradeTime)}</span>
+                        </div>
+                        <div class="details-item">
+                            <span class="details-label">距离上次交易</span>
+                            <span class="details-value">${minutesAgo !== null ? `${minutesAgo}分钟前` : '从未交易'}</span>
+                        </div>
+                        <div class="details-item">
+                            <span class="details-label">Cookie过期</span>
+                            <span class="details-value">${formatUTC8Time(accountData.expires_at || (Math.floor(Date.now() / 1000) + 4.5 * 24 * 60 * 60))}</span>
+                        </div>
+                    </div>
+                </div>
+
+                ${isAbnormal ? `
+                    <div class="details-section" style="border-left-color: #dc3545; background: #fff5f5;">
+                        <h3>⚠️ 异常信息</h3>
+                        <div class="details-item">
+                            <span class="details-label">异常原因</span>
+                            <span class="details-value" style="color: #dc3545; font-weight: bold;">
+                                ${minutesAgo !== null ? `已${minutesAgo}分钟无下单记录` : '运行中但无交易记录'}
+                            </span>
+                        </div>
+                        <div class="details-item">
+                            <span class="details-label">建议操作</span>
+                            <span class="details-value" style="color: #dc3545;">检查网络连接、账号状态或重启任务</span>
+                        </div>
+                    </div>
+                ` : ''}
+            `;
+
+            // 🔧 新增：根据运行中账号数量更新右上角刷新按钮状态
+            updateRefreshButtonStatus(runningAccounts);
+        }
+
+        // 页面卸载时清理定时器
+        window.addEventListener('beforeunload', function() {
+            if (refreshInterval) {
+                clearInterval(refreshInterval);
+            }
+        });
+
+        // 点击模态框外部关闭
+        window.addEventListener('click', function(event) {
+            const modal = document.getElementById('accountDetailsModal');
+            if (event.target === modal) {
+                closeDetailsModal();
+            }
+        });
+
+        // ESC键关闭模态框
+        window.addEventListener('keydown', function(event) {
+            if (event.key === 'Escape') {
+                const modal = document.getElementById('accountDetailsModal');
+                if (modal.style.display === 'block') {
+                    closeDetailsModal();
+                }
+            }
+        });
+
+        // 🔧 修改：全局自动重启管理器
+        class GlobalAutoRestartManager {
+            constructor() {
+                this.isEnabled = false;
+                this.monitoringAccounts = new Set();
+                this.checkInterval = null;
+            }
+
+            start() {
+                if (this.checkInterval) return;
+
+                // 每30秒检查一次监控状态
+                this.checkInterval = setInterval(() => {
+                    this.updateMonitoringStatus();
+                }, 30000);
+
+            }
+
+            async enableGlobalMonitoring() {
+                try {
+                    const response = await fetch('/api/auto-restart/enable', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            global: true  // 🔧 使用全局标志
+                        })
+                    });
+
+                    if (response.ok) {
+                        const data = await response.json();
+                        this.isEnabled = true;
+
+                        // 更新监控账号数量
+                        if (data.monitoring_count) {
+                            this.monitoringAccounts.clear();
+                            // 这里可以根据需要获取具体的账号列表
+                            for (let i = 0; i < data.monitoring_count; i++) {
+                                this.monitoringAccounts.add(`account_${i}`);
+                            }
+                        }
+
+                        this.updateGlobalStatus();
+                        return true;
+                    }
+                    return false;
+                } catch (error) {
+                    return false;
+                }
+            }
+
+            async disableGlobalMonitoring() {
+                try {
+                    const response = await fetch('/api/auto-restart/disable', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            global: true  // 🔧 使用全局标志
+                        })
+                    });
+
+                    if (response.ok) {
+                        const data = await response.json();
+                        this.monitoringAccounts.clear();
+                        this.isEnabled = false;
+                        this.updateGlobalStatus();
+                        return true;
+                    }
+                    return false;
+                } catch (error) {
+                    return false;
+                }
+            }
+
+            getAllActiveAccounts() {
+                const activeAccounts = [];
+
+                for (const [nodeId, nodeData] of Object.entries(window.currentNodesData || {})) {
+                    if (nodeData.账户统计) {
+                        for (const [accountId, accountData] of Object.entries(nodeData.账户统计)) {
+                            // 只监控正在运行的账号
+                            if (accountData.是否循环中 || accountData.is_looping) {
+                                activeAccounts.push({
+                                    nodeId: nodeId,
+                                    accountId: accountId,
+                                    accountData: accountData
+                                });
+                            }
+                        }
+                    }
+                }
+
+                return activeAccounts;
+            }
+
+            getDefaultTaskParams(accountInfo) {
+                const accountData = accountInfo.accountData;
+                return {
+                    token_address: accountData.current_token || accountData.当前代币 || "USDT",
+                    usdt_amount: 100,
+                    base_asset: "USDT",
+                    target_volume: accountData.目标交易量 || 10000,
+                    auto_loop: true,
+                    price_precision: 8
+                };
+            }
+
+            getNodeIdByAccountId(accountId) {
+                for (const [nodeId, nodeData] of Object.entries(window.currentNodesData || {})) {
+                    if (nodeData.账户统计 && nodeData.账户统计[accountId]) {
+                        return nodeId;
+                    }
+                }
+                return null;
+            }
+
+            updateGlobalStatus() {
+                const statusElement = document.getElementById('global-restart-status');
+                const statsElement = document.getElementById('restart-stats');
+                const countElement = document.getElementById('monitoring-count');
+
+                if (statusElement) {
+                    if (this.isEnabled) {
+                        statusElement.textContent = '已启用';
+                        statusElement.className = 'global-restart-status enabled';
+                    } else {
+                        statusElement.textContent = '未启用';
+                        statusElement.className = 'global-restart-status';
+                    }
+                }
+
+                if (statsElement && countElement) {
+                    if (this.isEnabled) {
+                        countElement.textContent = this.monitoringAccounts.size;
+                        statsElement.style.display = 'block';
+                    } else {
+                        statsElement.style.display = 'none';
+                    }
+                }
+            }
+
+            async updateMonitoringStatus() {
+                if (!this.isEnabled) return;
+
+                try {
+                    const response = await fetch('/api/auto-restart/status');
+                    if (response.ok) {
+                        const data = await response.json();
+                        if (data.success && data.monitoring_tasks) {
+                            // 更新监控账号列表
+                            this.monitoringAccounts.clear();
+                            for (const [key, task] of Object.entries(data.monitoring_tasks)) {
+                                this.monitoringAccounts.add(task.account_id);
+                            }
+                            this.updateGlobalStatus();
+                        }
+                    }
+                } catch (error) {
+                }
+            }
+        }
+
+        // 全局自动重启管理器
+        const globalAutoRestartManager = new GlobalAutoRestartManager();
+
+        // 切换全局自动重启
+        async function toggleGlobalAutoRestart(enabled) {
+            const checkbox = document.getElementById('global-auto-restart');
+
+            if (enabled) {
+                const success = await globalAutoRestartManager.enableGlobalMonitoring();
+                if (!success) {
+                    checkbox.checked = false;
+                    alert('启用全局自动重启失败，请检查网络连接');
+                }
+            } else {
+                const success = await globalAutoRestartManager.disableGlobalMonitoring();
+                if (!success) {
+                    checkbox.checked = true;
+                    alert('禁用全局自动重启失败，请检查网络连接');
+                }
+            }
+        }
+
+        // 🔧 新增：查看累积历史
+        async function viewCumulativeHistory(accountId) {
+            try {
+                const response = await fetch(`/cumulative-stats?account_id=${accountId}`);
+                if (response.ok) {
+                    const cumulativeStats = await response.json();
+                    showCumulativeHistoryModal(accountId, cumulativeStats);
+                } else {
+                    alert('获取累积统计失败');
+                }
+            } catch (error) {
+                alert('获取累积统计失败');
+            }
+        }
+
+        // 显示累积历史模态框
+        function showCumulativeHistoryModal(accountId, stats) {
+            const modal = document.createElement('div');
+            modal.className = 'modal-overlay';
+            modal.innerHTML = `
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h3>📈 累积统计历史 - ${accountId}</h3>
+                        <button class="modal-close" onclick="this.closest('.modal-overlay').remove()">×</button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="cumulative-summary">
+                            <div class="summary-item">
+                                <strong>原始目标交易额:</strong> ${stats.original_volume?.toFixed(2) || 0}
+                            </div>
+                            <div class="summary-item">
+                                <strong>总完成交易额:</strong> ${stats.completed_volume?.toFixed(2) || 0}
+                            </div>
+                            <div class="summary-item">
+                                <strong>重启次数:</strong> ${stats.restart_count || 0}
+                            </div>
+                            <div class="summary-item">
+                                <strong>创建时间:</strong> ${new Date(stats.created_at).toLocaleString()}
+                            </div>
+                        </div>
+
+                        <h4>📋 历史记录</h4>
+                        <div class="history-list">
+                            ${generateHistoryList(stats.history || [])}
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            document.body.appendChild(modal);
+        }
+
+        // 生成历史记录列表
+        function generateHistoryList(history) {
+            if (history.length === 0) {
+                return '<div class="no-history">暂无历史记录</div>';
+            }
+
+            return history.map((record, index) => `
+                <div class="history-item">
+                    <div class="history-header">
+                        <strong>第${index + 1}次任务</strong>
+                        <span class="history-reason">${getEndReasonText(record.end_reason)}</span>
+                    </div>
+                    <div class="history-details">
+                        <div>任务ID: ${record.task_id}</div>
+                        <div>目标交易额: ${record.target_volume?.toFixed(2) || 0}</div>
+                        <div>完成交易额: ${record.completed_volume?.toFixed(2) || 0}</div>
+                        <div>交易次数: ${record.trade_count || 0}</div>
+                        <div>盈亏: ${record.profit_loss?.toFixed(2) || 0}</div>
+                        <div>开始时间: ${new Date(record.start_time).toLocaleString()}</div>
+                        <div>结束时间: ${new Date(record.end_time).toLocaleString()}</div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // 获取结束原因文本
+        function getEndReasonText(reason) {
+            const reasonMap = {
+                'restart': '🔄 自动重启',
+                'completed': '✅ 任务完成',
+                'manual_stop': '🛑 手动停止',
+                'error': '❌ 异常结束'
+            };
+            return reasonMap[reason] || reason;
+        }
+
+        // 启动全局自动重启管理器
+        globalAutoRestartManager.start();
+    </script>
+
+    <style>
+        /* 🔧 新增：模态框样式 */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+
+        .modal-content {
+            background: white;
+            border-radius: 8px;
+            width: 90%;
+            max-width: 800px;
+            max-height: 80%;
+            overflow-y: auto;
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 20px;
+            border-bottom: 1px solid #dee2e6;
+        }
+
+        .modal-close {
+            background: none;
+            border: none;
+            font-size: 24px;
+            cursor: pointer;
+            color: #6c757d;
+        }
+
+        .modal-body {
+            padding: 20px;
+        }
+
+        .cumulative-summary {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+        }
+
+        .summary-item {
+            margin-bottom: 8px;
+        }
+
+        .history-list {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .history-item {
+            border: 1px solid #dee2e6;
+            border-radius: 6px;
+            margin-bottom: 10px;
+            padding: 15px;
+        }
+
+        .history-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .history-reason {
+            background: #e9ecef;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.9em;
+        }
+
+        .history-details {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            font-size: 0.9em;
+            color: #6c757d;
+        }
+
+        .no-history {
+            text-align: center;
+            color: #6c757d;
+            padding: 20px;
+        }
+
+
+
+        // 🔧 修改：测试数据获取函数 - 包含nodes接口
+        async function testDataFetch() {
+
+            try {
+                const statsResponse = await fetch('/api/v1/flash-trade/realtime-stats');
+                const statsData = await statsResponse.json();
+
+                const accountsResponse = await fetch('/api/v1/universal/accounts');
+                const accountsData = await accountsResponse.json();
+
+                const nodesResponse = await fetch('/api/v1/nodes');
+                const nodesData = await nodesResponse.json();
+
+                return { statsData, accountsData, nodesData };
+            } catch (error) {
+                return null;
+            }
+        }
+
+        // 🔧 新增：测试排序函数
+        function testNodeSorting() {
+
+            // 获取当前的节点数据
+            const currentData = window.currentNodesData || {};
+            const nodeStats = currentData.节点统计 || {};
+
+            if (Object.keys(nodeStats).length === 0) {
+                return;
+            }
+
+            // 显示每个节点的优先级
+            Object.entries(nodeStats).forEach(([nodeId, nodeData]) => {
+                const priority = getNodePriority(nodeData);
+                const isOffline = isNodeOffline(nodeData);
+                const displayStatus = getNodeDisplayStatus(nodeData);
+
+                    原始状态: nodeData.status,
+                    是否离线: isOffline,
+                    显示状态: displayStatus,
+                    排序优先级: priority
+                });
+            });
+
+            // 测试排序结果
+            const sortedNodes = Object.entries(nodeStats).sort(([nodeIdA, nodeDataA], [nodeIdB, nodeDataB]) => {
+                const priorityA = getNodePriority(nodeDataA);
+                const priorityB = getNodePriority(nodeDataB);
+                return priorityA - priorityB;
+            });
+        }
+
+
+
+        // 显示节点详细统计
+        function displayNodeStats(nodeStats) {
+            const nodeStatsGrid = document.getElementById('nodeStatsGrid');
+            if (!nodeStatsGrid) {
+                return;
+            }
+
+            let html = '';
+
+            for (const [nodeId, nodeData] of Object.entries(nodeStats)) {
+
+                const globalStats = nodeData.全局统计 || {};
+                const accountStats = nodeData.账户统计 || {};
+                const accountCount = Object.keys(accountStats).length;
+
+                // 获取节点基本信息
+                let activeAccounts = globalStats.活跃账户数 || nodeData.active_accounts || 0;
+                let totalVolume = globalStats.总当前交易量 || nodeData.total_volume || 0;
+                let completionRate = globalStats.完成率 || nodeData.completion_rate || 0;
+                let totalLoss = globalStats.总亏损 || nodeData.total_loss || 0;
+                let totalLossRate = globalStats.总亏损率 || nodeData.total_loss_rate || 0;
+
+                // 生成账户详情
+                let accountDetails = generateAccountDetails(nodeId, accountStats, accountCount);
+
+                // 节点状态
+                const nodeStatus = nodeData.status || 'unknown';
+                const statusClass = nodeStatus === 'online' ? 'online' : 'offline';
+                const statusText = nodeStatus === 'online' ? '在线' : '离线';
+
+                // 🔧 优先显示账户统计中的账户ID，和flash_trade页面保持一致
+                let displayName = nodeData.username || nodeData.friendly_name || nodeId;
+
+                // 如果有账户统计数据，优先显示第一个账户的账户ID
+                if (accountStats && Object.keys(accountStats).length > 0) {
+                    const firstAccountKey = Object.keys(accountStats)[0];
+                    const firstAccount = accountStats[firstAccountKey];
+                    if (firstAccount && firstAccount.账户ID) {
+                        displayName = firstAccount.账户ID;
+                        console.log(`✅ 节点 ${nodeId} 显示名称: ${displayName} (来自账户统计)`);
+                    }
+                }
+
+                html += `
+                    <div class="node-stat-card">
+                        <div class="node-header">
+                            <div class="node-title">
+                                🖥️ ${displayName}
+                            </div>
+                            <div class="node-status ${statusClass}">
+                                ${statusText}
+                            </div>
+                        </div>
+
+                        <div class="node-info">
+                            <div class="info-item">
+                                <div class="info-label">Flash Trade账户</div>
+                                <div class="info-value">${accountCount}</div>
+                            </div>
+                            <div class="info-item">
+                                <div class="info-label">活跃账户</div>
+                                <div class="info-value">${activeAccounts}</div>
+                            </div>
+                            <div class="info-item">
+                                <div class="info-label">交易量</div>
+                                <div class="info-value">${Number(totalVolume).toFixed(2)}</div>
+                            </div>
+                            <div class="info-item">
+                                <div class="info-label">完成率</div>
+                                <div class="info-value">${Number(completionRate).toFixed(1)}%</div>
+                            </div>
+                            <div class="info-item">
+                                <div class="info-label">总亏损</div>
+                                <div class="info-value" style="color: #dc3545;">${Number(totalLoss).toFixed(4)}</div>
+                            </div>
+                            <div class="info-item">
+                                <div class="info-label">亏损率</div>
+                                <div class="info-value" style="color: #dc3545;">${Number(totalLossRate).toFixed(2)}‱</div>
+                            </div>
+                        </div>
+
+                        ${accountDetails}
+
+                        <div style="text-align: center; margin-top: 15px; font-size: 12px; color: #6c757d;">
+                            任务开始时间: ${nodeData.metadata?.start_time ? new Date(nodeData.metadata.start_time).toLocaleString() : '未知'}<br>
+                            最后心跳: ${nodeData.last_heartbeat ? new Date(nodeData.last_heartbeat).toLocaleString() : '未知'}
+                        </div>
+                    </div>
+                `;
+            }
+
+            if (html === '') {
+                html = `
+                    <div style="grid-column: 1 / -1; text-align: center; padding: 60px 20px; color: #6c757d;">
+                        <div style="font-size: 48px; margin-bottom: 20px;">📊</div>
+                        <h3 style="margin-bottom: 10px; color: #495057;">暂无节点统计数据</h3>
+                        <p>请确保被控端正在运行并调用 Flash Trade 接口</p>
+                    </div>
+                `;
+            }
+
+            nodeStatsGrid.innerHTML = html;
+
+            // 应用搜索和筛选
+            applyAccountFilters();
+        }
+
+        // 🔧 新增：生成账户详情
+        function generateAccountDetails(nodeId, accountStats, accountCount) {
+            if (accountCount === 0) {
+                return `
+                    <div class="accounts-section">
+                        <div class="accounts-header">
+                            <strong>Flash Trade 账户 (0)</strong>
+                        </div>
+                        <div class="no-accounts">
+                            该节点暂无 Flash Trade 账户
+                        </div>
+                    </div>
+                `;
+            }
+
+            let accountsHtml = '';
+            for (const [accountId, accountData] of Object.entries(accountStats)) {
+                const isLooping = accountData.是否循环中 || false;
+                const cardClass = isLooping ? 'account-active' : 'account-idle';
+
+                // 计算进度
+                const currentVolume = accountData.总交易量 || 0;
+                const targetVolume = accountData.目标交易量 || 0;
+                const progress = targetVolume > 0 ? (currentVolume / targetVolume) * 100 : 0;
+
+                // 状态信息
+                const statusIcon = isLooping ? '🔥' : '💤';
+                const statusText = isLooping ? '循环中' : '空闲';
+
+                // 进度条颜色
+                let progressColor = '#28a745';
+                if (progress < 30) progressColor = '#dc3545';
+                else if (progress < 70) progressColor = '#ffc107';
+
+                accountsHtml += `
+                    <div class="account-card ${cardClass}" data-account-name="${accountId.toLowerCase()}" data-account-status="${isLooping ? 'active' : 'idle'}">
+                        <div class="account-header">
+                            <div class="account-name">${accountId}</div>
+                            <div class="account-status">
+                                <span class="status-icon">${statusIcon}</span>
+                                <span class="status-text">${statusText}</span>
+                            </div>
+                        </div>
+
+                        ${isLooping ? `
+                            <div class="account-progress">
+                                <div class="progress-info">
+                                    <span>进度</span>
+                                    <span>${progress.toFixed(1)}%</span>
+                                </div>
+                                <div class="progress-bar">
+                                    <div class="progress-fill" style="width: ${Math.min(progress, 100)}%; background: ${progressColor};"></div>
+                                </div>
+                            </div>
+                        ` : ''}
+
+                        <div class="account-details">
+                            <div class="detail-row">
+                                <span class="detail-label">总交易量:</span>
+                                <span class="detail-value">${Number(currentVolume).toFixed(2)}</span>
+                            </div>
+                            <div class="detail-row">
+                                <span class="detail-label">目标交易量:</span>
+                                <span class="detail-value">${Number(targetVolume).toFixed(2)}</span>
+                            </div>
+                            <div class="detail-row">
+                                <span class="detail-label">交易次数:</span>
+                                <span class="detail-value">${accountData.交易次数 || 0}</span>
+                            </div>
+                            <div class="detail-row">
+                                <span class="detail-label">总亏损:</span>
+                                <span class="detail-value loss-value">${Number(accountData.总亏损 || 0).toFixed(4)} USDT</span>
+                            </div>
+                            <div class="detail-row">
+                                <span class="detail-label">总亏损率:</span>
+                                <span class="detail-value loss-value">${Number(accountData.总亏损率 || 0).toFixed(2)}‱</span>
+                            </div>
+                            <div class="detail-row">
+                                <span class="detail-label">当前代币:</span>
+                                <span class="detail-value">
+                                    ${(accountData.current_token || accountData.当前代币) ? `<span class="token-name">${accountData.current_token || accountData.当前代币}</span>` : '无'}
+                                </span>
+                            </div>
+                            ${(accountData.last_trade_time || accountData.最后交易时间) && (accountData.last_trade_time || accountData.最后交易时间) > 0 ? `
+                                <div class="detail-row">
+                                    <span class="detail-label">最后交易:</span>
+                                    <span class="detail-value">${formatUTC8Time(accountData.last_trade_time || accountData.最后交易时间)}</span>
+                                </div>
+                            ` : ''}
+                        </div>
+                    </div>
+                `;
+            }
+
+            return `
+                <div class="accounts-section">
+                    <div class="accounts-header">
+                        <strong>Flash Trade 账户 (${accountCount})</strong>
+                        <button class="toggle-accounts-btn" onclick="toggleNodeAccounts('${nodeId}')">
+                            <span id="toggle-${nodeId}">收起</span>
+                        </button>
+                    </div>
+                    <div class="accounts-grid" id="accounts-${nodeId}">
+                        ${accountsHtml}
+                    </div>
+                </div>
+            `;
+        }
+
+        // 🔧 新增：切换节点账户显示
+        function toggleNodeAccounts(nodeId) {
+            const accountsGrid = document.getElementById(`accounts-${nodeId}`);
+            const toggleBtn = document.getElementById(`toggle-${nodeId}`);
+
+            if (accountsGrid.style.display === 'none') {
+                accountsGrid.style.display = 'grid';
+                toggleBtn.textContent = '收起';
+            } else {
+                accountsGrid.style.display = 'none';
+                toggleBtn.textContent = '展开';
+            }
+        }
+
+        // 🔧 新增：全部展开/收起账户
+        function toggleAllAccounts(expand) {
+            const accountsGrids = document.querySelectorAll('.accounts-grid');
+            const toggleBtns = document.querySelectorAll('[id^="toggle-"]');
+
+            accountsGrids.forEach(grid => {
+                grid.style.display = expand ? 'grid' : 'none';
+            });
+
+            toggleBtns.forEach(btn => {
+                btn.textContent = expand ? '收起' : '展开';
+            });
+        }
+
+        // 🔧 新增：紧凑模式切换
+        let isCompactMode = false;
+        function toggleCompactMode() {
+            const body = document.body;
+            const btn = document.getElementById('compactModeBtn');
+
+            isCompactMode = !isCompactMode;
+
+            if (isCompactMode) {
+                body.classList.add('compact-mode');
+                btn.textContent = '标准模式';
+                btn.style.background = 'linear-gradient(135deg, #ffc107, #e0a800)';
+            } else {
+                body.classList.remove('compact-mode');
+                btn.textContent = '紧凑模式';
+                btn.style.background = 'linear-gradient(135deg, #17a2b8, #138496)';
+            }
+        }
+
+        // 🔧 新增：账户搜索和筛选
+        function applyAccountFilters() {
+            const searchInput = document.getElementById('accountSearchInput');
+            const statusFilter = document.getElementById('accountStatusFilter');
+
+            if (!searchInput || !statusFilter) return;
+
+            const searchTerm = searchInput.value.toLowerCase();
+            const statusValue = statusFilter.value;
+
+            const accountCards = document.querySelectorAll('.account-card');
+            let visibleCount = 0;
+
+            accountCards.forEach(card => {
+                const accountName = card.getAttribute('data-account-name') || '';
+                const accountStatus = card.getAttribute('data-account-status') || '';
+
+                let showCard = true;
+
+                // 搜索筛选
+                if (searchTerm && !accountName.includes(searchTerm)) {
+                    showCard = false;
+                }
+
+                // 状态筛选
+                if (statusValue && accountStatus !== statusValue) {
+                    showCard = false;
+                }
+
+                if (showCard) {
+                    card.style.display = 'block';
+                    visibleCount++;
+                } else {
+                    card.style.display = 'none';
+                }
+            });
+
+        }
+
+        // 🔧 新增：绑定搜索和筛选事件
+        function bindAccountFilterEvents() {
+            const searchInput = document.getElementById('accountSearchInput');
+            const statusFilter = document.getElementById('accountStatusFilter');
+
+            if (searchInput) {
+                searchInput.addEventListener('input', applyAccountFilters);
+            }
+
+            if (statusFilter) {
+                statusFilter.addEventListener('change', applyAccountFilters);
+            }
+        }
+
+        // 🔧 新增：显示无数据消息
+        function showNoDataMessage() {
+            const nodeStatsGrid = document.getElementById('nodeStatsGrid');
+            if (nodeStatsGrid) {
+                nodeStatsGrid.innerHTML = `
+                    <div style="grid-column: 1 / -1; text-align: center; padding: 60px 20px; color: #6c757d;">
+                        <div style="font-size: 48px; margin-bottom: 20px;">📊</div>
+                        <h3 style="margin-bottom: 10px; color: #495057;">暂无节点统计数据</h3>
+                        <p>请确保被控端正在运行并调用 Flash Trade 接口</p>
+                    </div>
+                `;
+            }
+        }
+
+        // 🔧 新增：显示错误消息
+        function showErrorMessage(message) {
+            const nodeStatsGrid = document.getElementById('nodeStatsGrid');
+            if (nodeStatsGrid) {
+                nodeStatsGrid.innerHTML = `
+                <div style="grid-column: 1 / -1; text-align: center; padding: 60px 20px;">
+                    <div style="background: linear-gradient(135deg, #dc3545, #c82333); color: white; padding: 30px; border-radius: 15px; box-shadow: 0 8px 25px rgba(220, 53, 69, 0.3);">
+                        <div style="font-size: 48px; margin-bottom: 20px;">❌</div>
+                        <h3 style="margin-bottom: 15px;">数据获取失败</h3>
+                        <p style="margin-bottom: 20px; opacity: 0.9;">${message}</p>
+                        <button onclick="fetchFlashStatsData()" style="background: rgba(255,255,255,0.2); color: white; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-size: 14px;">
+                            🔄 重试
+                        </button>
+                    </div>
+                </div>
+            `;
+            }
+        }
+
+
+
+
+
+        // 🔧 新增：使用 Flash Trade 数据更新节点卡片
+        function updateNodeCardsWithFlashData() {
+            if (!flashStatsData || !flashStatsData.节点统计) {
+                return;
+            }
+
+
+            // 遍历所有节点统计数据
+            Object.entries(flashStatsData.节点统计).forEach(([nodeId, nodeData]) => {
+                if (!nodeData.账户统计) return;
+
+                // 遍历该节点的所有账户
+                Object.entries(nodeData.账户统计).forEach(([accountId, accountData]) => {
+                    updateAccountCardWithFlashData(nodeId, accountId, accountData);
+                });
+            });
+        }
+
+        // 🔧 新增：更新单个账户卡片的数据
+        function updateAccountCardWithFlashData(nodeId, accountId, flashAccountData) {
+            const accountCard = document.getElementById(`account-${accountId}`);
+            if (!accountCard) {
+                return;
+            }
+
+
+            // 更新账户状态
+            const isRunning = flashAccountData.是否循环中 || false;
+            const statusIndicator = accountCard.querySelector('.status-indicator');
+            const statusText = accountCard.querySelector('.account-status span');
+
+            if (statusIndicator) {
+                statusIndicator.className = `status-indicator ${isRunning ? 'running' : 'idle'}`;
+            }
+
+            if (statusText) {
+                const isAbnormal = isAccountAbnormalFromFlashData(flashAccountData);
+                const newStatusText = isAbnormal ? '❌ 异常' : (isRunning ? '🔥 运行中' : '💤 空闲');
+                statusText.textContent = newStatusText;
+            }
+
+            // 更新账户详细信息
+            const detailsDiv = accountCard.querySelector('.account-details');
+            if (detailsDiv && isRunning) {
+                // 使用 Flash Trade 数据更新详细信息（字段名与 flash_trade.go 一致）
+                const updatedDetails = `
+                    <strong>总交易量:</strong> ${(flashAccountData.总交易量 || 0).toFixed(2)}<br>
+                    <strong>目标交易量:</strong> ${(flashAccountData.目标交易量 || 0).toFixed(2)}<br>
+                    <strong>交易次数:</strong> ${flashAccountData.交易次数 || 0}<br>
+                    <strong>总亏损:</strong> ${(flashAccountData.总亏损 || 0).toFixed(4)} USDT<br>
+                    <strong>总亏损率:</strong> ${(flashAccountData.总亏损率 || 0).toFixed(2)}‱<br>
+                    当前代币: ${flashAccountData.current_token || flashAccountData.当前代币 || '无'}<br>
+                    <strong>开始时间:</strong> ${formatUTC8Time(flashAccountData.任务开始时间)}<br>
+                    <strong>最后交易:</strong> ${formatUTC8Time(flashAccountData.最后交易时间)}
+                `;
+                detailsDiv.innerHTML = updatedDetails;
+            }
+
+            // 更新卡片样式
+            const isAbnormal = isAccountAbnormalFromFlashData(flashAccountData);
+            let cardClass = isRunning ? 'running' : 'idle';
+            if (isAbnormal) cardClass += ' abnormal';
+
+            // 移除旧的状态类
+            accountCard.className = accountCard.className.replace(/\b(running|idle|abnormal)\b/g, '');
+            accountCard.className += ` ${cardClass}`;
+        }
+
+        // 🔧 新增：从 Flash Trade 数据判断账户是否异常
+        function isAccountAbnormalFromFlashData(accountData) {
+            const isRunning = accountData.是否循环中 || false;
+            if (!isRunning) return false;
+
+            const lastTradeTime = accountData.last_trade_time || accountData.最后交易时间;
+            if (!lastTradeTime || lastTradeTime <= 0) {
+                return true; // 运行中但无交易记录
+            }
+
+            const now = Math.floor(Date.now() / 1000);
+            const minutesAgo = Math.floor((now - lastTradeTime) / 60);
+            return minutesAgo > 8; // 超过8分钟无交易
+        }
+
+
+
+        // 导出到全局作用域
+        window.fetchFlashStatsData = fetchFlashStatsData;
+        window.toggleNodeAccounts = toggleNodeAccounts;
+        window.toggleAllAccounts = toggleAllAccounts;
+        window.toggleCompactMode = toggleCompactMode;
+        window.formatUTC8Time = formatUTC8Time;
+
+    </script>
+</body>
+</html>

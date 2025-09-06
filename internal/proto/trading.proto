@@ -1,0 +1,379 @@
+syntax = "proto3";
+
+package trading;
+
+option go_package = "alpha-autosell-bot/internal/proto";
+
+// 交易服务定义
+service TradingService {
+  // 执行即时交易
+  rpc ExecuteInstantTrade(InstantTradeRequest) returns (InstantTradeResponse);
+
+  // 开始自动循环交易
+  rpc StartAutoTrade(AutoTradeRequest) returns (AutoTradeResponse);
+
+  // 停止自动循环交易
+  rpc StopAutoTrade(StopTradeRequest) returns (StopTradeResponse);
+
+  // 获取节点状态
+  rpc GetNodeStatus(NodeStatusRequest) returns (NodeStatusResponse);
+
+  // 获取交易统计
+  rpc GetTradeStats(StatsRequest) returns (StatsResponse);
+
+  // 获取交易结果历史
+  rpc GetTradeResults(ResultsRequest) returns (ResultsResponse);
+
+  // 心跳检测
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+
+  // 节点注册（被控端启动时立即注册）
+  rpc RegisterNode(NodeRegisterRequest) returns (NodeRegisterResponse);
+
+  // 实时状态流（双向流）
+  rpc StatusStream(stream StatusStreamRequest) returns (stream StatusStreamResponse);
+
+  // Flash Trade 相关接口
+  // 启动Flash Trade
+  rpc StartFlashTrade(FlashTradeRequest) returns (FlashTradeResponse);
+
+  // 停止Flash Trade
+  rpc StopFlashTrade(StopFlashTradeRequest) returns (StopFlashTradeResponse);
+
+  // 获取Flash Trade状态
+  rpc GetFlashTradeStats(FlashTradeStatsRequest) returns (FlashTradeStatsResponse);
+
+  // 账号管理
+  rpc ManageAccount(AccountManageRequest) returns (AccountManageResponse);
+}
+
+// 即时交易请求
+message InstantTradeRequest {
+  string token_address = 1;
+  double min_balance = 2;      // 最小余额要求
+  double sell_percentage = 3;  // 卖出百分比 (0-100)
+  string account_id = 4;
+  string node_id = 5;          // 执行节点ID
+}
+
+// 即时交易响应
+message InstantTradeResponse {
+  bool success = 1;
+  string message = 2;
+  string token_balance = 3;
+  string sell_amount = 4;
+  string received_usdt = 5;
+  string order_id = 6;
+  int64 execute_time_ms = 7;
+  int64 timestamp = 8;
+}
+
+// 交易响应
+message TradeResponse {
+  bool success = 1;
+  string message = 2;
+  double buy_price = 3;
+  double sell_price = 4;
+  double token_amount = 5;
+  double profit = 6;
+  int64 execute_time_ms = 7;
+  string trade_id = 8;
+  int64 timestamp = 9;
+}
+
+// 自动交易请求
+message AutoTradeRequest {
+  InstantTradeRequest trade_request = 1;
+  double target_volume = 2;
+  bool auto_loop = 3;
+  int32 min_delay = 4;
+  int32 max_delay = 5;
+  string node_id = 6;
+}
+
+// 自动交易响应
+message AutoTradeResponse {
+  bool success = 1;
+  string message = 2;
+  string task_id = 3;
+  string node_id = 4;
+}
+
+// 停止交易请求
+message StopTradeRequest {
+  string account_id = 1;
+  string node_id = 2;
+}
+
+// 停止交易响应
+message StopTradeResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// 节点状态请求
+message NodeStatusRequest {
+  string node_id = 1;
+}
+
+// 节点状态响应
+message NodeStatusResponse {
+  string node_id = 1;
+  string status = 2;  // online, offline, busy
+  int32 active_trades = 3;
+  double cpu_usage = 4;
+  double memory_usage = 5;
+  int64 uptime = 6;
+  int64 last_heartbeat = 7;
+  repeated string active_accounts = 8;
+}
+
+// 统计请求
+message StatsRequest {
+  string account_id = 1;  // 空表示全局统计
+  string node_id = 2;     // 空表示所有节点
+}
+
+// 统计响应
+message StatsResponse {
+  bool success = 1;
+  GlobalStats global = 2;
+  map<string, AccountStats> accounts = 3;
+  map<string, NodeStats> nodes = 4;
+}
+
+// 全局统计
+message GlobalStats {
+  double total_target_volume = 1;
+  double total_current_volume = 2;
+  double total_loss = 3;
+  double total_loss_rate = 4;
+  double completion_rate = 5;
+  int32 active_accounts = 6;
+  double projected_loss_100k = 7;
+  int32 active_nodes = 8;
+}
+
+// 账户统计
+message AccountStats {
+  string account_id = 1;
+  double total_volume = 2;
+  double target_volume = 3;
+  int32 trade_count = 4;
+  double total_loss = 5;
+  double total_loss_rate = 6;
+  bool is_looping = 7;
+  int64 last_trade_time = 8;
+  string assigned_node = 9;
+}
+
+// 节点统计
+message NodeStats {
+  string node_id = 1;
+  int32 total_trades = 2;
+  double total_volume = 3;
+  int32 active_accounts = 4;
+  double success_rate = 5;
+  double avg_execute_time = 6;
+}
+
+// 交易结果请求
+message ResultsRequest {
+  string account_id = 1;
+  string node_id = 2;
+  int32 limit = 3;
+  int64 start_time = 4;
+  int64 end_time = 5;
+}
+
+// 交易结果响应
+message ResultsResponse {
+  bool success = 1;
+  string account_id = 2;
+  int32 count = 3;
+  repeated TradeResult results = 4;
+}
+
+// 交易结果
+message TradeResult {
+  string trade_id = 1;
+  bool success = 2;
+  string message = 3;
+  double buy_price = 4;
+  double sell_price = 5;
+  double token_amount = 6;
+  double profit = 7;
+  int64 execute_time_ms = 8;
+  int64 timestamp = 9;
+  string account_id = 10;
+  string node_id = 11;
+}
+
+// 心跳请求
+message HeartbeatRequest {
+  string node_id = 1;
+  int64 timestamp = 2;
+  map<string, string> metadata = 3;  // 节点元数据
+}
+
+// 心跳响应
+message HeartbeatResponse {
+  bool success = 1;
+  int64 server_time = 2;
+  string message = 3;
+}
+
+// 状态流请求
+message StatusStreamRequest {
+  string node_id = 1;
+  string request_type = 2;  // subscribe, unsubscribe, ping
+  repeated string topics = 3;  // trades, stats, nodes
+}
+
+// 状态流响应
+message StatusStreamResponse {
+  string topic = 1;
+  string event_type = 2;  // trade_completed, stats_updated, node_status_changed
+  bytes data = 3;  // JSON序列化的具体数据
+  int64 timestamp = 4;
+}
+
+// 命令消息（用于Redis消息队列）
+message CommandMessage {
+  string command_id = 1;
+  string command_type = 2;  // execute_trade, start_auto, stop_auto
+  string target_node = 3;   // 目标节点ID，空表示任意节点
+  bytes payload = 4;        // 命令载荷
+  int64 timestamp = 5;
+  int32 priority = 6;       // 优先级 1-10
+  int64 expire_time = 7;    // 过期时间
+}
+
+// 节点注册消息
+message NodeRegistration {
+  string node_id = 1;
+  string node_type = 2;     // master, slave
+  string address = 3;       // gRPC地址
+  map<string, string> metadata = 4;  // 节点元数据
+  int64 timestamp = 5;
+}
+
+// 账号管理请求
+message AccountManageRequest {
+  string action = 1;        // add, update, delete, get
+  string node_id = 2;       // 目标节点ID
+  string account_id = 3;    // 账号ID
+  string name = 4;          // 账号名称
+  string csrftoken = 5;     // CSRF Token
+  string cookie = 6;        // Cookie字符串
+  string description = 7;   // 描述
+  string status = 8;        // 状态 (active, inactive)
+}
+
+// 账号管理响应
+message AccountManageResponse {
+  bool success = 1;
+  string message = 2;
+  string node_id = 3;
+  string account_id = 4;
+}
+
+// 节点注册请求
+message NodeRegisterRequest {
+  string node_id = 1;
+  string node_type = 2;        // master, slave
+  string http_addr = 3;        // HTTP API地址
+  string grpc_addr = 4;        // gRPC地址
+  map<string, string> metadata = 5;  // 节点元数据
+  int64 timestamp = 6;
+}
+
+// 节点注册响应
+message NodeRegisterResponse {
+  bool success = 1;
+  string message = 2;
+  string assigned_node_id = 3;  // 主控端分配的节点ID（如果需要）
+}
+
+// Flash Trade 请求
+message FlashTradeRequest {
+  string node_id = 1;           // 目标节点ID，空表示任意节点
+  string account_id = 2;        // 账号ID，空表示所有账号
+  string token_address = 3;     // 代币地址
+  double usdt_amount = 4;       // USDT交易金额
+  string base_asset = 5;        // 基础资产 (默认ALPHA_251)
+  double target_volume = 6;     // 目标交易额
+  bool auto_loop = 7;           // 是否自动循环
+  int32 price_precision = 8;    // 价格精度位数
+}
+
+// Flash Trade 响应
+message FlashTradeResponse {
+  bool success = 1;
+  string message = 2;
+  string task_id = 3;           // 任务ID
+  repeated string affected_nodes = 4;  // 受影响的节点列表
+  repeated string affected_accounts = 5;  // 受影响的账号列表
+}
+
+// 停止Flash Trade请求
+message StopFlashTradeRequest {
+  string node_id = 1;           // 目标节点ID，空表示所有节点
+  string account_id = 2;        // 账号ID，空表示所有账号
+  string task_id = 3;           // 任务ID，空表示停止所有
+}
+
+// 停止Flash Trade响应
+message StopFlashTradeResponse {
+  bool success = 1;
+  string message = 2;
+  int32 stopped_count = 3;      // 停止的任务数量
+}
+
+// Flash Trade 统计请求
+message FlashTradeStatsRequest {
+  string node_id = 1;           // 节点ID，空表示所有节点
+  string account_id = 2;        // 账号ID，空表示所有账号
+}
+
+// Flash Trade 统计响应
+message FlashTradeStatsResponse {
+  bool success = 1;
+  string message = 2;
+  FlashTradeGlobalStats global_stats = 3;
+  repeated FlashTradeAccountStats account_stats = 4;
+  repeated FlashTradeNodeStats node_stats = 5;
+}
+
+// Flash Trade 全局统计
+message FlashTradeGlobalStats {
+  double total_target_volume = 1;   // 总目标交易量
+  double total_current_volume = 2;  // 总当前交易量
+  double total_loss = 3;            // 总亏损
+  double total_loss_rate = 4;       // 总亏损率
+  double completion_rate = 5;       // 完成率
+  int32 active_accounts = 6;        // 活跃账户数
+  double projected_loss_100k = 7;   // 10万预计亏损
+}
+
+// Flash Trade 账号统计
+message FlashTradeAccountStats {
+  string account_id = 1;        // 账户ID
+  string node_id = 2;           // 所属节点ID
+  double total_volume = 3;      // 总交易量
+  double target_volume = 4;     // 目标交易量
+  int32 trade_count = 5;        // 交易次数
+  int64 last_trade_time = 6;    // 最后交易时间
+  bool is_looping = 7;          // 是否循环中
+  double total_loss = 8;        // 总亏损
+  double total_loss_rate = 9;   // 总亏损率
+}
+
+// Flash Trade 节点统计
+message FlashTradeNodeStats {
+  string node_id = 1;           // 节点ID
+  int32 active_accounts = 2;    // 活跃账户数
+  double total_volume = 3;      // 节点总交易量
+  double total_loss = 4;        // 节点总亏损
+  int32 total_trades = 5;       // 节点总交易次数
+}
