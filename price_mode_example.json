@@ -1,0 +1,131 @@
+{
+  "examples": {
+    "limit_mode": {
+      "description": "限价模式 - 仅获取限价订单价格",
+      "request": {
+        "token_address": "0xa2be3e48170a60119b5f0400c65f65f3158fbeee",
+        "usdt_amount": 100,
+        "base_asset": "USDT",
+        "csrftoken": "your_csrf_token",
+        "cookie": "your_cookie",
+        "target_volume": 1000,
+        "auto_loop": true,
+        "price_precision": 8,
+        "chain_id": "56",
+        "price_mode": "limit"
+      },
+      "websocket_subscription": "came@0xa2be3e48170a60119b5f0400c65f65f3158fbeee@56@limit@kline_15m"
+    },
+    
+    "market_mode": {
+      "description": "链上模式 - 仅获取链上交易价格",
+      "request": {
+        "token_address": "0xa2be3e48170a60119b5f0400c65f65f3158fbeee",
+        "usdt_amount": 100,
+        "base_asset": "USDT",
+        "csrftoken": "your_csrf_token",
+        "cookie": "your_cookie",
+        "target_volume": 1000,
+        "auto_loop": true,
+        "price_precision": 8,
+        "chain_id": "56",
+        "price_mode": "market"
+      },
+      "websocket_subscription": "came@0xa2be3e48170a60119b5f0400c65f65f3158fbeee@56@market@kline_15m"
+    },
+    
+    "combined_mode": {
+      "description": "链上+限价模式 - 获取综合价格信息",
+      "request": {
+        "token_address": "0xa2be3e48170a60119b5f0400c65f65f3158fbeee",
+        "usdt_amount": 100,
+        "base_asset": "USDT",
+        "csrftoken": "your_csrf_token",
+        "cookie": "your_cookie",
+        "target_volume": 1000,
+        "auto_loop": true,
+        "price_precision": 8,
+        "chain_id": "56",
+        "price_mode": "combined"
+      },
+      "websocket_subscription": "came@0xa2be3e48170a60119b5f0400c65f65f3158fbeee@56@kline_15m"
+    },
+    
+    "auto_mode": {
+      "description": "自动模式 - 系统自动选择最佳价格模式（默认为combined）",
+      "request": {
+        "token_address": "0xa2be3e48170a60119b5f0400c65f65f3158fbeee",
+        "usdt_amount": 100,
+        "base_asset": "USDT",
+        "csrftoken": "your_csrf_token",
+        "cookie": "your_cookie",
+        "target_volume": 1000,
+        "auto_loop": true,
+        "price_precision": 8,
+        "chain_id": "56",
+        "price_mode": "auto"
+      },
+      "websocket_subscription": "came@0xa2be3e48170a60119b5f0400c65f65f3158fbeee@56@kline_15m"
+    }
+  },
+  
+  "api_usage": {
+    "flash_trade_endpoint": {
+      "url": "POST /trade",
+      "description": "Flash Trade 交易接口，支持价格模式参数",
+      "example_curl": "curl -X POST http://localhost:8080/trade -H 'Content-Type: application/json' -d '{\"token_address\":\"0xa2be3e48170a60119b5f0400c65f65f3158fbeee\",\"usdt_amount\":100,\"price_mode\":\"combined\"}'"
+    },
+    
+    "master_node_task": {
+      "description": "Master节点分发任务时可指定价格模式",
+      "example": {
+        "task_type": "flash_trade",
+        "parameters": {
+          "token_address": "0xa2be3e48170a60119b5f0400c65f65f3158fbeee",
+          "usdt_amount": 100,
+          "price_mode": "market"
+        }
+      }
+    }
+  },
+  
+  "price_modes": {
+    "limit": {
+      "name": "限价模式",
+      "description": "仅获取限价订单的价格信息",
+      "use_case": "适用于需要精确限价交易的场景",
+      "subscription_format": "came@{address}@{chainID}@limit@kline_{interval}"
+    },
+    
+    "market": {
+      "name": "链上模式", 
+      "description": "仅获取链上实际交易的价格信息",
+      "use_case": "适用于需要真实市场价格的场景",
+      "subscription_format": "came@{address}@{chainID}@market@kline_{interval}"
+    },
+    
+    "combined": {
+      "name": "链上+限价模式",
+      "description": "获取综合的价格信息，包含限价和链上价格",
+      "use_case": "适用于需要全面价格信息的场景，推荐使用",
+      "subscription_format": "came@{address}@{chainID}@kline_{interval}"
+    },
+    
+    "auto": {
+      "name": "自动模式",
+      "description": "系统自动选择最佳价格模式，默认使用combined模式",
+      "use_case": "适用于大多数场景，无需手动选择",
+      "subscription_format": "came@{address}@{chainID}@kline_{interval}"
+    }
+  },
+  
+  "migration_guide": {
+    "existing_code": "无需修改现有代码，所有现有调用将自动使用auto模式",
+    "new_features": [
+      "在TradeRequest中添加price_mode字段",
+      "调用price.GetTokenPriceWithMode()指定模式",
+      "使用price.SubscribeTokenPriceWithMode()订阅特定模式"
+    ],
+    "backward_compatibility": "完全向后兼容，现有代码无需修改"
+  }
+}

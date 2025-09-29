@@ -18,7 +18,15 @@ import (
 	"time"
 
 	"alpha-autosell-bot/price"
+
 	"github.com/go-redis/redis/v8"
+)
+
+// 速度模式常量
+const (
+	SpeedModeFast   = "fast"   // 快速模式：更短的延迟，更高的API调用频率
+	SpeedModeNormal = "normal" // 正常模式：平衡的延迟和API调用频率
+	SpeedModeSlow   = "slow"   // 慢速模式：更长的延迟，更低的API调用频率
 )
 
 // inferBaseAssetFromTokenAddress 根据代币地址推断 base_asset
@@ -55,6 +63,123 @@ func getTaskChainID(task *AutoSellTask) string {
 	return "56" // 默认使用BSC链
 }
 
+// getPriceMode 获取价格模式，如果为空则返回默认值"auto"
+func getPriceMode(req *TradeRequest) price.PriceMode {
+	if req != nil && req.PriceMode != "" {
+		switch strings.ToLower(req.PriceMode) {
+		case "limit":
+			return price.PriceModeLimit
+		case "market":
+			return price.PriceModeMarket
+		case "combined":
+			return price.PriceModeCombined
+		case "auto":
+			return price.PriceModeAuto
+		default:
+			log.Printf("⚠️ 未知的价格模式: %s, 使用默认模式", req.PriceMode)
+			return price.PriceModeAuto
+		}
+	}
+	return price.PriceModeAuto // 默认使用自动模式
+}
+
+// getBuyPriceMode 获取买单专用价格模式，优化成功率
+func getBuyPriceMode(req *TradeRequest) price.PriceMode {
+	if req != nil && req.PriceMode != "" {
+		userMode := strings.ToLower(req.PriceMode)
+		switch userMode {
+		case "limit":
+			// 限价模式：买单使用market模式获取更真实的价格
+			log.Printf("🎯 [%s] 买单优化：用户选择limit模式，切换到market模式确保成功率", req.AccountID)
+			return price.PriceModeMarket
+		case "market":
+			// 链上模式：直接使用，获取真实成交价
+			return price.PriceModeMarket
+		case "combined":
+			// 综合模式：买单使用market模式，避免限价订单影响
+			log.Printf("🎯 [%s] 买单优化：用户选择combined模式，切换到market模式确保成功率", req.AccountID)
+			return price.PriceModeMarket
+		case "auto":
+			// 自动模式：买单使用market模式
+			return price.PriceModeMarket
+		default:
+			log.Printf("⚠️ 未知的价格模式: %s, 买单使用market模式", req.PriceMode)
+			return price.PriceModeMarket
+		}
+	}
+	// 默认买单使用market模式，确保获取真实成交价格
+	return price.PriceModeMarket
+}
+
+// 🚀 应用速度模式配置
+func applySpeedMode(speedMode string) {
+	mode, exists := speedModes[speedMode]
+	if !exists {
+		log.Printf("⚠️ 未知的速度模式: %s, 使用默认普通模式", speedMode)
+		mode = speedModes["normal"]
+	}
+
+	log.Printf("🚀 应用速度模式: %s - %s", mode.Name, mode.Description)
+
+	// 更新全局配置
+	tradeInterval = mode.TradeInterval
+	maxOrdersPerSecond = mode.MaxOrdersPerSecond
+	maxAPICallsPerSecond = mode.MaxAPICallsPerSecond
+	apiCallInterval = mode.APICallInterval
+
+	// 更新全局API限制器
+	globalAPILimiter.mutex.Lock()
+	globalAPILimiter.maxRequests = mode.GlobalAPILimit
+	globalAPILimiter.mutex.Unlock()
+
+
+}
+
+// 🚀 获取速度模式信息
+func getSpeedModeInfo(speedMode string) SpeedModeConfig {
+	mode, exists := speedModes[speedMode]
+	if !exists {
+		return speedModes["normal"] // 默认返回普通模式
+	}
+	return mode
+}
+
+// 🚀 获取当前速度模式（根据当前配置推断）
+func getCurrentSpeedMode() SpeedModeConfig {
+	// 根据当前的tradeInterval判断速度模式
+	for _, mode := range speedModes {
+		if mode.TradeInterval == tradeInterval {
+			return mode
+		}
+	}
+	// 如果找不到匹配的，返回普通模式
+	return speedModes["normal"]
+}
+
+// 账户速度模式映射
+var accountSpeedModes = make(map[string]string)
+var accountSpeedModesMutex sync.RWMutex
+
+// getSpeedModeForAccount 获取指定账户的速度模式
+func getSpeedModeForAccount(accountID string) string {
+	accountSpeedModesMutex.RLock()
+	defer accountSpeedModesMutex.RUnlock()
+	
+	if mode, exists := accountSpeedModes[accountID]; exists {
+		return mode
+	}
+	return SpeedModeNormal // 默认使用正常模式
+}
+
+// setSpeedModeForAccount 设置指定账户的速度模式
+func setSpeedModeForAccount(accountID, mode string) {
+	accountSpeedModesMutex.Lock()
+	defer accountSpeedModesMutex.Unlock()
+	
+	accountSpeedModes[accountID] = mode
+	log.Printf("🚀 [%s] 设置速度模式为: %s", accountID, mode)
+}
+
 type TradeRequest struct {
 	TokenAddress   string  `json:"token_address,omitempty" json_cn:"代币地址,omitempty"`
 	USDTAmount     float64 `json:"usdt_amount,omitempty" json_cn:"USDT金额,omitempty"`
@@ -65,6 +190,8 @@ type TradeRequest struct {
 	AutoLoop       bool    `json:"auto_loop,omitempty" json_cn:"自动循环,omitempty"`       // 是否自动循环
 	PricePrecision int     `json:"price_precision,omitempty" json_cn:"价格精度,omitempty"` // 价格精度位数
 	ChainID        string  `json:"chain_id,omitempty" json_cn:"链ID,omitempty"`         // 区块链ID，默认为"56"(BSC)
+	PriceMode      string  `json:"price_mode,omitempty" json_cn:"价格模式,omitempty"`      // 价格模式: limit/market/combined/auto
+	SpeedMode      string  `json:"speed_mode,omitempty" json_cn:"速度模式,omitempty"`      // 🚀 新增：速度模式 (fast/normal/slow)
 
 	// 固定延迟值，不从JSON解析
 	MinDelay int `json:"-"` // 固定为1秒
@@ -163,6 +290,52 @@ var serviceStartTime = time.Now() // 🔧 新增：服务启动时间
 // 默认链ID常量
 const DEFAULT_CHAIN_ID = "56" // BSC链ID
 
+// 🚀 速度模式配置
+type SpeedModeConfig struct {
+	Name                 string        // 模式名称
+	TradeInterval        time.Duration // 交易间隔
+	MaxOrdersPerSecond   int           // 每秒最大下单数
+	MaxAPICallsPerSecond int           // 每秒最大API调用数
+	APICallInterval      time.Duration // API调用间隔
+	VolumeAPIInterval    time.Duration // 刷量模式API间隔
+	GlobalAPILimit       int           // 全局API限制
+	Description          string        // 模式描述
+}
+
+// 🚀 三种速度模式配置
+var speedModes = map[string]SpeedModeConfig{
+	"fast": {
+		Name:                 "快速模式",
+		TradeInterval:        5 * time.Second,        // 5秒交易间隔
+		MaxOrdersPerSecond:   3,                      // 每秒3次下单
+		MaxAPICallsPerSecond: 8,                      // 每秒8次API调用
+		APICallInterval:      100 * time.Millisecond, // 100ms API间隔
+		VolumeAPIInterval:    150 * time.Millisecond, // 150ms刷量间隔
+		GlobalAPILimit:       6,                      // 全局6次/秒
+		Description:          "高效率，中等风控风险",
+	},
+	"normal": {
+		Name:                 "普通模式",
+		TradeInterval:        8 * time.Second,        // 8秒交易间隔
+		MaxOrdersPerSecond:   2,                      // 每秒2次下单
+		MaxAPICallsPerSecond: 4,                      // 每秒4次API调用
+		APICallInterval:      200 * time.Millisecond, // 200ms API间隔
+		VolumeAPIInterval:    300 * time.Millisecond, // 300ms刷量间隔
+		GlobalAPILimit:       3,                      // 全局3次/秒
+		Description:          "平衡效率与安全，推荐使用",
+	},
+	"slow": {
+		Name:                 "慢速模式",
+		TradeInterval:        15 * time.Second,       // 15秒交易间隔
+		MaxOrdersPerSecond:   1,                      // 每秒1次下单
+		MaxAPICallsPerSecond: 2,                      // 每秒2次API调用
+		APICallInterval:      500 * time.Millisecond, // 500ms API间隔
+		VolumeAPIInterval:    800 * time.Millisecond, // 800ms刷量间隔
+		GlobalAPILimit:       1,                      // 全局1次/秒
+		Description:          "极度保守，最低风控风险",
+	},
+}
+
 // 🛡️ 币安安全刷量模式配置参数
 var (
 	maxBuyRetryAttempts   = 2    // 🔥 刷量优化：减少买入重试次数
@@ -170,9 +343,9 @@ var (
 	maxHTTPRetryAttempts  = 3    // 🔥 刷量优化：减少HTTP重试次数
 	isVolumeMode          = true // 🔥 刷量模式开关
 
-	// 🛡️ 币安安全限制
-	maxOrdersPerSecond   = 8  // 每秒最大下单数（低于币安10次限制）
-	maxAPICallsPerSecond = 15 // 每秒最大API调用数（低于币安20次限制）
+	// 🛡️ 动态配置参数（根据速度模式调整）
+	maxOrdersPerSecond   = 2 // 每秒最大下单数（默认普通模式）
+	maxAPICallsPerSecond = 4 // 每秒最大API调用数（默认普通模式）
 
 	// 🛡️ 智能限流计数器
 	orderCounter   = make(map[int64]int) // 每秒下单计数
@@ -1219,25 +1392,75 @@ func (r *APIRateLimiter) RecordRequest() {
 // 🔧 优化：等待直到可以发送请求（提升响应速度）
 func (r *APIRateLimiter) WaitForSlot() {
 	for !r.CanRequest() {
-		time.Sleep(20 * time.Millisecond) // 优化：从50ms缩短到20ms检查一次
+		time.Sleep(50 * time.Millisecond) // 适度等待时间，减少CPU占用，更平滑的请求分布
 	}
+	// 仅记录请求，不再添加随机延迟，确保价格获取后可以立即执行交易
 	r.RecordRequest()
+}
+
+// 根据速度模式调整API调用间隔
+func (r *APIRateLimiter) AdjustForSpeedMode(accountID string) {
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+	
+	speedMode := getSpeedModeForAccount(accountID)
+	switch speedMode {
+	case SpeedModeFast:
+		r.maxRequests = 1
+		// 快速模式：1.5-2.5秒随机窗口
+		r.timeWindow = time.Duration(1500+rand.Intn(1000)) * time.Millisecond
+	case SpeedModeSlow:
+		r.maxRequests = 1
+		// 慢速模式：7-9秒随机窗口
+		r.timeWindow = time.Duration(7000+rand.Intn(2000)) * time.Millisecond
+	default: // SpeedModeNormal
+		r.maxRequests = 1
+		// 正常模式：4-6秒随机窗口
+		r.timeWindow = time.Duration(4000+rand.Intn(2000)) * time.Millisecond
+	}
 }
 
 // 🔧 优化：全局API频率限制器实例（提升并发能力）
 var globalAPILimiter = &APIRateLimiter{
 	requests:    make([]time.Time, 0),
-	maxRequests: 12, // 优化：从9次/秒提升到12次/秒，提高并发能力
-	timeWindow:  time.Second,
+	maxRequests: 1, // 🚨 风控优化：默认1次/5秒，可根据速度模式调整
+	timeWindow:  5 * time.Second, // 默认时间窗口5秒
 }
 
 // API调用包装器
 func safeAPICall(apiFunc func() error, funcName string, accountID string) error {
 	// 🔧 新增：检查是否因429错误暂停
 	globalRateLimitHandler.WaitIfPaused(accountID)
+	
+	// 根据账户速度模式调整API限速器
+	globalAPILimiter.AdjustForSpeedMode(accountID)
 
 	// 等待API调用槽位
 	globalAPILimiter.WaitForSlot()
+	
+	// 🚨 优化：根据函数类型和速度模式添加延迟
+	// 关键交易函数（下单、价格获取等）不添加延迟，非关键函数添加随机延迟
+	if !isTimeCriticalFunction(funcName) {
+		speedMode := getSpeedModeForAccount(accountID)
+		var delayTime time.Duration
+		
+		switch speedMode {
+		case SpeedModeFast:
+			// 快速模式：0.5-0.8秒随机延迟
+			delayTime = time.Duration(500+rand.Intn(300)) * time.Millisecond
+			log.Printf("⚡ [%s] 快速模式：API调用前延迟%.1f秒 [%s]", accountID, delayTime.Seconds(), funcName)
+		case SpeedModeSlow:
+			// 慢速模式：3-5秒随机延迟
+			delayTime = time.Duration(3000+rand.Intn(2000)) * time.Millisecond
+			log.Printf("🐢 [%s] 慢速模式：API调用前延迟%.1f秒 [%s]", accountID, delayTime.Seconds(), funcName)
+		default: // SpeedModeNormal
+			// 正常模式：1.5-2.5秒随机延迟
+			delayTime = time.Duration(1500+rand.Intn(1000)) * time.Millisecond
+			log.Printf("⏱️ [%s] 正常模式：API调用前延迟%.1f秒 [%s]", accountID, delayTime.Seconds(), funcName)
+		}
+		
+		time.Sleep(delayTime)
+	}
 
 	// 执行API调用
 	err := apiFunc()
@@ -1247,6 +1470,21 @@ func safeAPICall(apiFunc func() error, funcName string, accountID string) error 
 	}
 
 	return err
+}
+
+// isTimeCriticalFunction 判断是否为时间关键函数（不应添加延迟的函数）
+func isTimeCriticalFunction(funcName string) bool {
+	// 这些函数涉及价格获取和交易执行，不应添加延迟
+	timeCriticalFunctions := map[string]bool{
+		"PlaceOrder":        true, // 下单
+		"GetPrice":          true, // 获取价格
+		"ExecuteTrade":      true, // 执行交易
+		"GetTokenPrice":     true, // 获取代币价格
+		"GetMarketPrice":    true, // 获取市场价格
+		"SubmitMarketOrder": true, // 提交市价单
+	}
+	
+	return timeCriticalFunctions[funcName]
 }
 
 // 🔧 新增：带429错误检测的HTTP请求执行器
@@ -1367,6 +1605,331 @@ func executeHTTPRequestWithRetry(req *http.Request, client *http.Client, account
 	return resp, nil
 }
 
+// 极端行情配置
+type ExtremeMarketConfig struct {
+	Enabled             bool    `json:"enabled"`              // 是否启用极端行情检测
+	DropThreshold       float64 `json:"drop_threshold"`       // 极端下跌阈值（百分比）
+	VolatileThreshold   float64 `json:"volatile_threshold"`   // 极端波动阈值（百分比）
+	AutoPause           bool    `json:"auto_pause"`           // 是否自动暂停
+	PauseDuration       int     `json:"pause_duration"`       // 暂停持续时间（分钟）
+	CleanupOrders       bool    `json:"cleanup_orders"`       // 是否清理挂单
+	CleanupTokens       bool    `json:"cleanup_tokens"`       // 是否清理代币残留
+	AutoResumeEnabled   bool    `json:"auto_resume_enabled"`  // 是否自动恢复
+	StabilityThreshold  float64 `json:"stability_threshold"`  // 稳定阈值（百分比）
+	StabilityDuration   int     `json:"stability_duration"`   // 稳定持续时间（分钟）
+}
+
+// 全局极端行情配置
+var extremeMarketConfig = ExtremeMarketConfig{
+	Enabled:             true,
+	DropThreshold:       -15.0,  // 默认-15%为极端下跌
+	VolatileThreshold:   10.0,   // 默认10%为极端波动
+	AutoPause:           true,
+	PauseDuration:       30,     // 默认暂停30分钟
+	CleanupOrders:       true,
+	CleanupTokens:       true,
+	AutoResumeEnabled:   true,
+	StabilityThreshold:  5.0,    // 默认波动小于5%视为稳定
+	StabilityDuration:   15,     // 默认稳定15分钟后恢复
+}
+
+// 极端行情暂停记录
+type ExtremeMarketPause struct {
+	TokenAddress    string    // 代币地址
+	ChainID         string    // 链ID
+	PauseTime       time.Time // 暂停时间
+	Reason          string    // 暂停原因
+	AffectedAccounts []string  // 受影响的账户
+}
+
+// 全局极端行情暂停记录
+var (
+	extremeMarketPauses     = make(map[string]*ExtremeMarketPause) // 代币地址@链ID -> 暂停记录
+	extremeMarketPauseMutex sync.RWMutex
+	
+	// 市场恢复监控器
+	marketRecoveryMonitor     *time.Ticker
+	marketRecoveryStopChan    chan struct{}
+	marketRecoveryIsRunning   bool
+	marketRecoveryMutex       sync.Mutex
+)
+
+// 检查是否应该暂停交易
+func shouldPauseTrading(tokenAddress, chainID string) (bool, string) {
+	// 如果未启用极端行情检测，直接返回false
+	if !extremeMarketConfig.Enabled {
+		return false, ""
+	}
+	
+	// 检查是否已经暂停
+	extremeMarketPauseMutex.RLock()
+	key := tokenAddress + "@" + chainID
+	if pause, exists := extremeMarketPauses[key]; exists {
+		// 如果暂停时间未超过设定的暂停时长，继续暂停
+		if time.Since(pause.PauseTime) < time.Duration(extremeMarketConfig.PauseDuration)*time.Minute {
+			extremeMarketPauseMutex.RUnlock()
+			return true, pause.Reason
+		}
+	}
+	extremeMarketPauseMutex.RUnlock()
+	
+	// 检查当前市场状态
+	isExtreme, reason := price.IsExtremeMarket(tokenAddress, chainID)
+	if isExtreme && extremeMarketConfig.AutoPause {
+		// 记录极端行情暂停
+		pauseTrading(tokenAddress, chainID, reason)
+		return true, reason
+	}
+	
+	return false, ""
+}
+
+// 暂停交易
+func pauseTrading(tokenAddress, chainID, reason string) {
+	key := tokenAddress + "@" + chainID
+	
+	extremeMarketPauseMutex.Lock()
+	defer extremeMarketPauseMutex.Unlock()
+	
+	// 如果已经存在暂停记录，更新时间和原因
+	if pause, exists := extremeMarketPauses[key]; exists {
+		pause.PauseTime = time.Now()
+		pause.Reason = reason
+		log.Printf("🚨 更新极端行情暂停: %s, 原因: %s", key, reason)
+		return
+	}
+	
+	// 创建新的暂停记录
+	extremeMarketPauses[key] = &ExtremeMarketPause{
+		TokenAddress:     tokenAddress,
+		ChainID:          chainID,
+		PauseTime:        time.Now(),
+		Reason:           reason,
+		AffectedAccounts: make([]string, 0),
+	}
+	
+	log.Printf("🚨 检测到极端行情，暂停交易: %s, 原因: %s", key, reason)
+	
+	// 启动市场恢复监控（如果未启动）
+	startMarketRecoveryMonitor()
+}
+
+// 添加账户到受影响列表
+func addAffectedAccount(tokenAddress, chainID, accountID string) {
+	key := tokenAddress + "@" + chainID
+	
+	extremeMarketPauseMutex.Lock()
+	defer extremeMarketPauseMutex.Unlock()
+	
+	if pause, exists := extremeMarketPauses[key]; exists {
+		// 检查账户是否已在列表中
+		for _, acc := range pause.AffectedAccounts {
+			if acc == accountID {
+				return
+			}
+		}
+		
+		// 添加账户到列表
+		pause.AffectedAccounts = append(pause.AffectedAccounts, accountID)
+		
+		// 设置账户暂停状态
+		if extremeMarketConfig.AutoPause {
+			setAccountPauseStatus(accountID, time.Duration(extremeMarketConfig.PauseDuration)*time.Minute, 
+				fmt.Sprintf("极端行情暂停: %s", pause.Reason))
+			
+			// 清理账户挂单
+			if extremeMarketConfig.CleanupOrders {
+				auth, exists := getAccountAuth(accountID)
+				if exists {
+					go func(auth *AccountAuth) {
+						cleanupAccountOrders(accountID, auth.Csrftoken, auth.Cookie)
+					}(auth)
+				}
+			}
+			
+			// 清理代币残留
+			if extremeMarketConfig.CleanupTokens {
+				auth, exists := getAccountAuth(accountID)
+				if exists {
+					go func(auth *AccountAuth, tokenAddr, chainId string) {
+						// 获取代币基础资产
+						baseAsset := inferBaseAssetFromTokenAddress(tokenAddr)
+						
+						// 强制清理代币
+						forceCleanToken(tokenAddr, baseAsset, auth.Csrftoken, auth.Cookie, 8)
+					}(auth, tokenAddress, chainID)
+				}
+			}
+		}
+	}
+}
+
+// 启动市场恢复监控
+func startMarketRecoveryMonitor() {
+	marketRecoveryMutex.Lock()
+	defer marketRecoveryMutex.Unlock()
+	
+	if marketRecoveryIsRunning {
+		return
+	}
+	
+	marketRecoveryIsRunning = true
+	marketRecoveryStopChan = make(chan struct{})
+	marketRecoveryMonitor = time.NewTicker(1 * time.Minute)
+	
+	go func() {
+		for {
+			select {
+			case <-marketRecoveryMonitor.C:
+				checkMarketRecovery()
+			case <-marketRecoveryStopChan:
+				marketRecoveryMonitor.Stop()
+				return
+			}
+		}
+	}()
+	
+	log.Printf("🔄 启动市场恢复监控")
+}
+
+// 停止市场恢复监控
+func stopMarketRecoveryMonitor() {
+	marketRecoveryMutex.Lock()
+	defer marketRecoveryMutex.Unlock()
+	
+	if !marketRecoveryIsRunning {
+		return
+	}
+	
+	close(marketRecoveryStopChan)
+	marketRecoveryIsRunning = false
+	
+	log.Printf("⏹️ 停止市场恢复监控")
+}
+
+// 检查市场是否恢复
+func checkMarketRecovery() {
+	extremeMarketPauseMutex.Lock()
+	defer extremeMarketPauseMutex.Unlock()
+	
+	// 如果没有暂停记录或未启用自动恢复，直接返回
+	if len(extremeMarketPauses) == 0 || !extremeMarketConfig.AutoResumeEnabled {
+		return
+	}
+	
+	now := time.Now()
+	tokensToResume := make([]string, 0)
+	
+	// 检查每个暂停的代币
+	for key, pause := range extremeMarketPauses {
+		// 检查是否已经超过暂停时间
+		if now.Sub(pause.PauseTime) > time.Duration(extremeMarketConfig.PauseDuration)*time.Minute {
+			// 获取当前市场状态
+			condition := price.GetMarketCondition(pause.TokenAddress, pause.ChainID)
+			
+			// 检查市场是否稳定
+			if !condition.IsExtreme && math.Abs(condition.PriceChange) < extremeMarketConfig.StabilityThreshold {
+				tokensToResume = append(tokensToResume, key)
+				
+				// 恢复受影响的账户
+				for _, accountID := range pause.AffectedAccounts {
+					clearAccountPauseStatus(accountID)
+					log.Printf("✅ 市场恢复，重新启用账户: %s", accountID)
+				}
+				
+				log.Printf("✅ 市场恢复，恢复交易: %s", key)
+			}
+		}
+	}
+	
+	// 移除已恢复的代币
+	for _, key := range tokensToResume {
+		delete(extremeMarketPauses, key)
+	}
+	
+	// 如果没有暂停记录，停止监控
+	if len(extremeMarketPauses) == 0 {
+		go stopMarketRecoveryMonitor()
+	}
+}
+
+// 获取极端行情配置
+func getExtremeMarketConfig() ExtremeMarketConfig {
+	return extremeMarketConfig
+}
+
+// 设置极端行情配置
+func setExtremeMarketConfig(config ExtremeMarketConfig) {
+	extremeMarketConfig = config
+	
+	// 更新price包中的阈值
+	price.SetExtremeThresholds(config.DropThreshold, config.VolatileThreshold)
+}
+
+// 获取所有极端行情暂停记录
+func getExtremeMarketPauses() map[string]interface{} {
+	extremeMarketPauseMutex.RLock()
+	defer extremeMarketPauseMutex.RUnlock()
+	
+	result := make(map[string]interface{})
+	
+	for key, pause := range extremeMarketPauses {
+		result[key] = map[string]interface{}{
+			"token_address":     pause.TokenAddress,
+			"chain_id":          pause.ChainID,
+			"pause_time":        pause.PauseTime,
+			"reason":            pause.Reason,
+			"affected_accounts": pause.AffectedAccounts,
+			"remaining_minutes": extremeMarketConfig.PauseDuration - int(time.Since(pause.PauseTime).Minutes()),
+		}
+	}
+	
+	return result
+}
+
+// 处理极端行情配置API
+func handleExtremeMarketConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "GET" {
+		// 获取当前配置
+		config := getExtremeMarketConfig()
+		
+		// 转换为JSON
+		response := map[string]interface{}{
+			"config": config,
+			"pauses": getExtremeMarketPauses(),
+		}
+		
+		jsonResponse, err := json.Marshal(response)
+		if err != nil {
+			http.Error(w, "内部服务器错误", http.StatusInternalServerError)
+			return
+		}
+		
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(jsonResponse)
+		return
+	}
+	
+	if r.Method == "POST" {
+		// 解析请求体
+		var config ExtremeMarketConfig
+		if err := json.NewDecoder(r.Body).Decode(&config); err != nil {
+			http.Error(w, "无效的请求数据", http.StatusBadRequest)
+			return
+		}
+		
+		// 更新配置
+		setExtremeMarketConfig(config)
+		
+		// 返回成功
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"success": true, "message": "极端行情配置已更新"}`))
+		return
+	}
+	
+	http.Error(w, "不支持的请求方法", http.StatusMethodNotAllowed)
+}
+
 func main() {
 	log.Printf("🚀 Multi-account trading server starting...")
 
@@ -1479,8 +2042,13 @@ func main() {
 	http.HandleFunc("/rate-limit-status", handleRateLimitStatus)
 	// 🔧 新增：网络连接状态查询端点
 	http.HandleFunc("/network-status", handleNetworkStatus)
+	// 🚀 新增：速度模式管理端点
+	http.HandleFunc("/speed-mode", handleSpeedMode)
+	http.HandleFunc("/speed-modes", handleSpeedModes)
 	// 🔧 新增：账号管理端点
 	http.HandleFunc("/accounts", handleAccountsManagement)
+	// 🧹 新增：完整清理接口（暂停+清理挂单+清理代币残留）
+	http.HandleFunc("/complete-cleanup", handleCompleteCleanup)
 
 	// 🔧 新增：手动恢复暂停状态的接口
 	http.HandleFunc("/resume", func(w http.ResponseWriter, r *http.Request) {
@@ -1507,16 +2075,12 @@ func main() {
 		json.NewEncoder(w).Encode(response)
 	})
 
+	// 添加极端行情配置API
+	http.HandleFunc("/api/extreme-market-config", handleExtremeMarketConfig)
+
 	log.Printf("🚀 Multi-account trading server starting on :8080")
 	// API endpoints已配置
-	log.Printf("   GET  /global - View global stats")
-	log.Printf("   POST /stop   - Stop account loop")
-	log.Printf("   GET  /result - View trade results")
-	log.Printf("   GET  /health - Health check")
-	log.Printf("   GET  /account-status - View account processing status")
-	log.Printf("   GET/DELETE /pause-status - View/Clear account pause status")
-	log.Printf("   GET/POST /trade-interval - View/Set trade interval")
-	log.Printf("   GET/POST /api-interval - View/Set API call interval")
+
 
 	// 启动全局挂单清理器
 	go startGlobalOrderCleaner()
@@ -1558,6 +2122,10 @@ func handleTrade(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+	
+	// 每次交易请求开始时，清理过期的异步状态和代币卖出状态
+	cleanupExpiredAsyncStates()
+	cleanupExpiredTokenSellStatuses()
 
 	if r.Method == "OPTIONS" {
 		w.WriteHeader(http.StatusOK)
@@ -1573,6 +2141,14 @@ func handleTrade(w http.ResponseWriter, r *http.Request) {
 		response := TradeResponse{Success: false, Message: "Invalid request"}
 		json.NewEncoder(w).Encode(convertToChineseFields(response))
 		return
+	}
+
+	// 🚀 应用速度模式配置
+	if req.SpeedMode != "" {
+		applySpeedMode(req.SpeedMode)
+	} else {
+		// 默认使用普通模式
+		applySpeedMode("normal")
 	}
 
 	// 通过KYC接口获取firstName作为AccountID
@@ -1740,19 +2316,36 @@ func handleTrade(w http.ResponseWriter, r *http.Request) {
 	// 🔧 检查是否因429错误暂停
 	globalRateLimitHandler.WaitIfPaused(req.AccountID)
 
-	// 先验证能否获取实时价格
-	_, priceErr := price.GetTokenPriceWithPrecision(req.TokenAddress, getChainID(&req), req.PricePrecision)
+	// 先验证能否获取实时价格 - 使用买单专用价格模式
+	buyPriceMode := getBuyPriceMode(&req)
+	_, priceErr := price.GetTokenPriceWithPrecisionAndMode(req.TokenAddress, getChainID(&req), req.PricePrecision, buyPriceMode)
 	if priceErr != nil {
+		// 🔧 价格验证失败时的降级策略
+		log.Printf("⚠️ [%s] 买单价格验证失败(模式:%s)，尝试降级: %v", req.AccountID, buyPriceMode, priceErr)
 
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"success": false,
-			"message": "实时价格获取失败",
-			"error":   priceErr.Error(),
-			"成功":      false,
-			"消息":      "实时价格获取失败",
-			"错误":      priceErr.Error(),
-		})
-		return
+		// 降级到combined模式验证
+		_, priceErr = price.GetTokenPriceWithPrecisionAndMode(req.TokenAddress, getChainID(&req), req.PricePrecision, price.PriceModeCombined)
+		if priceErr != nil {
+			// 最后尝试limit模式
+			_, priceErr = price.GetTokenPriceWithPrecisionAndMode(req.TokenAddress, getChainID(&req), req.PricePrecision, price.PriceModeLimit)
+			if priceErr != nil {
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"success": false,
+					"message": "所有价格模式验证失败",
+					"error":   priceErr.Error(),
+					"成功":      false,
+					"消息":      "所有价格模式验证失败",
+					"错误":      priceErr.Error(),
+				})
+				return
+			} else {
+				log.Printf("✅ [%s] 降级到limit模式验证成功", req.AccountID)
+			}
+		} else {
+			log.Printf("✅ [%s] 降级到combined模式验证成功", req.AccountID)
+		}
+	} else {
+		log.Printf("✅ [%s] 买单价格验证成功(模式:%s)", req.AccountID, buyPriceMode)
 	}
 
 	// 初始化账号统计
@@ -1868,16 +2461,44 @@ func handleTrade(w http.ResponseWriter, r *http.Request) {
 			if shouldStartLoop {
 				log.Printf("🔄 [%s] 启动自动循环 - 原因: %s", req.AccountID, response.Message)
 				startAutoLoop(&req)
-			} else {
-				// 只有在严重错误时才不启动循环（如认证失效）
-				if strings.Contains(response.Message, "AUTH_FAILED") ||
-					strings.Contains(response.Message, "认证失效") {
-					log.Printf("🚨 [%s] 认证失效，不启动自动循环", req.AccountID)
-				} else {
-					log.Printf("🔄 [%s] 其他错误也启动自动循环，确保持续尝试 - 响应: %s", req.AccountID, response.Message)
-					startAutoLoop(&req)
-				}
-			}
+								} else {
+						// 只有在严重错误时才不启动循环（如认证失效）
+						if strings.Contains(response.Message, "AUTH_FAILED") ||
+							strings.Contains(response.Message, "认证失效") {
+							log.Printf("🚨 [%s] 认证失效，不启动自动循环", req.AccountID)
+						} else if strings.Contains(response.Message, "余额不足") || 
+							strings.Contains(response.Message, "INSUFFICIENT_BALANCE") {
+							// 检查代币是否已被卖出
+							if isTokenSold(req.AccountID, req.TokenAddress) {
+								status := getTokenSellStatus(req.AccountID, req.TokenAddress)
+								log.Printf("✅ [%s] 余额不足错误，但代币已被其他流程卖出 - 方式: %s, 价格: %.8f, 数量: %.6f", 
+									req.AccountID, status.SoldBy, status.SoldPrice, status.SoldAmount)
+								// 不启动自动循环，因为代币已卖出
+							} else {
+								// 检查代币余额
+								tokenBalance, balErr := getTokenBalance(req.TokenAddress, req.Csrftoken, req.Cookie)
+								if balErr == nil {
+									freeAmount, _ := strconv.ParseFloat(tokenBalance.Free, 64)
+									if freeAmount <= 0 {
+										log.Printf("✅ [%s] 余额不足错误，代币余额为0，可能已被卖出，不启动自动循环", req.AccountID)
+										// 设置代币已卖出状态，但卖出方式未知
+										setTokenSold(req.AccountID, req.TokenAddress, "unknown", 0, 0)
+									} else {
+										log.Printf("⚠️ [%s] 余额不足错误，但代币余额不为0 (%.6f)，启动自动循环尝试卖出", 
+											req.AccountID, freeAmount)
+										startAutoLoop(&req)
+									}
+								} else {
+									log.Printf("⚠️ [%s] 余额不足错误，无法检查代币余额: %v，启动自动循环尝试卖出", 
+										req.AccountID, balErr)
+									startAutoLoop(&req)
+								}
+							}
+						} else {
+							log.Printf("🔄 [%s] 其他错误也启动自动循环，确保持续尝试 - 响应: %s", req.AccountID, response.Message)
+							startAutoLoop(&req)
+						}
+					}
 		}
 	}()
 }
@@ -1893,21 +2514,93 @@ func executeSingleTrade(req *TradeRequest) TradeResponse {
 			Message: "该账户有异步操作进行中，请稍后重试",
 		}
 	}
-
-	currentPrice, err := price.GetTokenPriceWithPrecision(req.TokenAddress, getChainID(req), req.PricePrecision)
-	if err != nil {
-
-		return TradeResponse{Success: false, Message: "获取价格失败: " + err.Error()}
+	
+	// 设置账户的速度模式
+	if req.SpeedMode != "" {
+		speedMode := strings.ToLower(req.SpeedMode)
+		switch speedMode {
+		case SpeedModeFast, SpeedModeNormal, SpeedModeSlow:
+			setSpeedModeForAccount(req.AccountID, speedMode)
+			log.Printf("🚀 [%s] 设置速度模式为: %s", req.AccountID, speedMode)
+		default:
+			log.Printf("⚠️ [%s] 未知的速度模式: %s, 使用默认正常模式", req.AccountID, speedMode)
+			setSpeedModeForAccount(req.AccountID, SpeedModeNormal)
+		}
+	} else {
+		// 如果没有指定速度模式，使用默认的正常模式
+		setSpeedModeForAccount(req.AccountID, SpeedModeNormal)
 	}
-	// 获取到价格
+	
+	// 检查是否应该暂停交易
+	shouldPause, reason := shouldPauseTrading(req.TokenAddress, req.ChainID)
+	if shouldPause {
+		// 添加账户到受影响列表
+		addAffectedAccount(req.TokenAddress, req.ChainID, req.AccountID)
+		
+		return TradeResponse{
+			Success: false,
+			Message: fmt.Sprintf("极端行情暂停交易: %s", reason),
+		}
+	}
 
-	// 买单价格直接加万一提高成交率
-	buyPrice := currentPrice * 1.0001 // 加万分之1
+	// 🎯 买单使用专用价格模式，确保高成功率
+	buyPriceMode := getBuyPriceMode(req)
+	currentPrice, err := price.GetTokenPriceWithPrecisionAndMode(req.TokenAddress, getChainID(req), req.PricePrecision, buyPriceMode)
+	if err != nil {
+		// 🔧 买单价格获取失败时，尝试降级策略
+		log.Printf("⚠️ [%s] 买单价格获取失败(模式:%s)，尝试降级策略: %v", req.AccountID, buyPriceMode, err)
+
+		// 降级策略1: 尝试combined模式
+		if buyPriceMode != price.PriceModeCombined {
+			currentPrice, err = price.GetTokenPriceWithPrecisionAndMode(req.TokenAddress, getChainID(req), req.PricePrecision, price.PriceModeCombined)
+			if err == nil {
+				log.Printf("✅ [%s] 降级到combined模式成功获取价格: %.8f", req.AccountID, currentPrice)
+				goto priceObtained
+			}
+		}
+
+		// 降级策略2: 尝试limit模式
+		currentPrice, err = price.GetTokenPriceWithPrecisionAndMode(req.TokenAddress, getChainID(req), req.PricePrecision, price.PriceModeLimit)
+		if err == nil {
+			log.Printf("✅ [%s] 降级到limit模式成功获取价格: %.8f", req.AccountID, currentPrice)
+			goto priceObtained
+		}
+
+		// 所有模式都失败
+		return TradeResponse{Success: false, Message: "所有价格模式获取失败: " + err.Error()}
+	}
+
+priceObtained:
+	log.Printf("📈 [%s] 买单价格获取成功(模式:%s): %.8f", req.AccountID, buyPriceMode, currentPrice)
+
+	// 🎯 买单价格策略优化：根据价格模式调整加价幅度
+	var buyPrice float64
+	switch buyPriceMode {
+	case price.PriceModeMarket:
+		// 链上模式：加万二，确保超过真实成交价
+		buyPrice = currentPrice * 1.0002 // 加万分之2
+		log.Printf("💰 [%s] 链上模式买单：加万二提高成交率 %.8f → %.8f", req.AccountID, currentPrice, buyPrice)
+	case price.PriceModeLimit:
+		// 限价模式：加万一，避免过度加价
+		buyPrice = currentPrice * 1.0001 // 加万分之1
+		log.Printf("💰 [%s] 限价模式买单：加万一确保成交 %.8f → %.8f", req.AccountID, currentPrice, buyPrice)
+	default:
+		// 其他模式：加万一点五
+		buyPrice = currentPrice * 1.0015 // 加万分之1.5
+		log.Printf("💰 [%s] 综合模式买单：加万一点五平衡成交率 %.8f → %.8f", req.AccountID, currentPrice, buyPrice)
+	}
+
 	buyPrice = adjustPricePrecision(buyPrice, req.PricePrecision)
 
 	// 2. 计算数量和金额，确保符合币安要求
-	// 先计算理想数量（使用加价后的买入价格）
-	idealTokenAmount := req.USDTAmount / buyPrice
+	// 🔧 取消随机浮动，使用固定参数传递的数值
+	adjustedUSDTAmount := req.USDTAmount
+
+	log.Printf("📊 [%s] 买入量使用固定值: %.6f USDT (不再使用随机浮动)",
+		req.AccountID, adjustedUSDTAmount)
+
+	// 先计算理想数量（使用调整后的USDT金额和加价后的买入价格）
+	idealTokenAmount := adjustedUSDTAmount / buyPrice
 
 	// 数量必须取整（币安要求）
 	tokenAmount := float64(int(idealTokenAmount))
@@ -1917,6 +2610,9 @@ func executeSingleTrade(req *TradeRequest) TradeResponse {
 
 	// 将金额调整为8位小数（币安要求），确保精度一致
 	exactAmount := math.Round(calculatedAmount*100000000) / 100000000
+
+	// 🔧 记录实际使用的USDT金额用于统计
+	actualUSDTUsed := exactAmount // 实际花费的USDT金额
 
 	// 二次验证：确保价格×数量=金额完全匹配
 	verification := math.Round((buyPrice*tokenAmount)*100000000) / 100000000
@@ -1962,7 +2658,8 @@ func executeSingleTrade(req *TradeRequest) TradeResponse {
 				freeAmount, _ := strconv.ParseFloat(tokenBalance.Free, 64)
 				if freeAmount > 0 {
 					// 🔧 检查代币价值，只处理高价值代币
-					marketPrice, priceErr := price.GetTokenPriceWithPrecision(req.TokenAddress, getChainID(req), 8)
+					priceMode := getPriceMode(req)
+					marketPrice, priceErr := price.GetTokenPriceWithPrecisionAndMode(req.TokenAddress, getChainID(req), 8, priceMode)
 					if priceErr == nil {
 						tokenValue := freeAmount * marketPrice
 						if tokenValue >= 0.1 {
@@ -2043,7 +2740,8 @@ func executeSingleTrade(req *TradeRequest) TradeResponse {
 				freeAmount, _ := strconv.ParseFloat(tokenBalance.Free, 64)
 				if freeAmount > 1.0 {
 					// 🔧 新逻辑：检查代币价值，只处理高价值代币
-					marketPrice, priceErr := price.GetTokenPriceWithPrecision(req.TokenAddress, getChainID(req), req.PricePrecision)
+					priceMode := getPriceMode(req)
+					marketPrice, priceErr := price.GetTokenPriceWithPrecisionAndMode(req.TokenAddress, getChainID(req), req.PricePrecision, priceMode)
 					if priceErr == nil {
 						tokenValue := freeAmount * marketPrice
 						if tokenValue > 1.0 {
@@ -2124,8 +2822,8 @@ func executeSingleTrade(req *TradeRequest) TradeResponse {
 			buyConfirmed = true
 			log.Printf("✅ [%s] 买入确认成功", req.AccountID)
 
-			// 🔧 新增：主买单成功后立即统计买入交易额
-			buyInCost := buyPrice * tokenAmount // 实际买入成本
+			// 🔧 新增：主买单成功后立即统计买入交易额（使用实际金额）
+			buyInCost := actualUSDTUsed // 🎲 使用实际花费的USDT金额，确保统计准确
 			if buyInCost > 0 && tokenAmount > 0 {
 				// 生成唯一交易ID防止重复统计
 				tradeID := generateTradeID(req.AccountID, req.TokenAddress, buyPrice, tokenAmount)
@@ -2140,6 +2838,7 @@ func executeSingleTrade(req *TradeRequest) TradeResponse {
 
 	// 如果超时还没成交，强制取消订单
 	if !buyConfirmed {
+		log.Printf("⚠️ [%s] 买入订单超时未成交，开始取消订单: %s", req.AccountID, buyOrderID)
 
 		// 🔧 增强：取消订单，增加等待时间和验证
 		cancelSuccess := false
@@ -2149,7 +2848,7 @@ func executeSingleTrade(req *TradeRequest) TradeResponse {
 				time.Sleep(500 * time.Millisecond) // 增加等待时间
 
 				// 验证订单是否真的被取消（可选，避免过度验证）
-				log.Printf("✅ [%s] 订单取消请求已发送", req.AccountID)
+				log.Printf("✅ [%s] 买入订单取消成功，准备重新买入", req.AccountID)
 				cancelSuccess = true
 				break
 			} else if attempt < 3 {
@@ -2158,20 +2857,22 @@ func executeSingleTrade(req *TradeRequest) TradeResponse {
 		}
 
 		if cancelSuccess {
-
+			// 🔧 修复：买入失败后重新买入，不应该进行卖出
+			log.Printf("🔄 [%s] 买入订单已取消，重新获取价格进行买入重试", req.AccountID)
 			return retryBuyWithNewPrice(req, startTime)
 		} else {
 			// 单个订单取消失败，尝试取消所有订单
-
+			log.Printf("❌ [%s] 买入订单取消失败，尝试取消所有订单", req.AccountID)
 			if cancelAllOrders(req.Csrftoken, req.Cookie) {
-
 				return TradeResponse{Success: false, Message: "买入超时，已取消所有订单"}
 			} else {
-
 				return TradeResponse{Success: false, Message: "买入超时且取消失败，需要人工处理"}
 			}
 		}
 	}
+
+	// 🔧 确保只有买入成功才会执行到这里
+	log.Printf("✅ [%s] 买入订单确认成功，买入价格: %.8f, 代币数量: %.6f", req.AccountID, buyPrice, tokenAmount)
 
 	// 4. 注册账户认证信息到全局管理器
 	registerAccountAuth(req.AccountID, req.Csrftoken, req.Cookie)
@@ -2199,12 +2900,47 @@ func placeOrderWithID(order OrderRequest) (string, bool) {
 	var resp *http.Response
 	var body []byte
 
+
+
 	// 使用频率控制器包装API调用
 	err := safeAPICall(func() error {
+		// 在发送请求前，详细记录订单信息，特别是数量字段
+		if order.Side == "SELL" {
+			log.Printf("🔍 [%s] 下单详情 - 代币: %s, 价格: %.8f", 
+				accountID, order.BaseAsset, order.Price)
+			log.Printf("🔍 [%s] 数量字段 - Quantity: %v (类型: %T)", 
+				accountID, order.Quantity, order.Quantity)
+			
+			if len(order.PaymentDetails) > 0 {
+				log.Printf("🔍 [%s] PaymentDetails - Amount: %v (类型: %T), AmountStr: %s", 
+					accountID, order.PaymentDetails[0].Amount, 
+					order.PaymentDetails[0].Amount, 
+					order.PaymentDetails[0].AmountStr)
+			}
+			
+			// 确保数量字段一致性
+			if len(order.PaymentDetails) > 0 {
+				// 使用AmountStr重新设置所有数量字段，确保一致性
+				amountStr := order.PaymentDetails[0].AmountStr
+				amount, _ := strconv.ParseFloat(amountStr, 64)
+				
+				// 更新所有数量字段
+				order.Quantity = amount
+				order.PaymentDetails[0].Amount = amount
+				
+				log.Printf("🔧 [%s] 统一后数量字段 - Quantity: %v, Amount: %v, AmountStr: %s", 
+					accountID, order.Quantity, order.PaymentDetails[0].Amount, amountStr)
+			}
+		}
+		
 		jsonData, _ := json.Marshal(order)
+		
+		// 打印完整的JSON请求体，用于调试
+		log.Printf("📦 [%s] 请求JSON: %s", accountID, string(jsonData))
 
 		req, err := http.NewRequest("POST", "https://www.binance.com/bapi/asset/v1/private/alpha-trade/order/place", bytes.NewReader(jsonData))
 		if err != nil {
+			log.Printf("❌ [%s] 创建下单请求失败: %v", accountID, err)
 			return err
 		}
 
@@ -2217,35 +2953,55 @@ func placeOrderWithID(order OrderRequest) (string, bool) {
 
 		client := &http.Client{Timeout: 5 * time.Second}
 		// 🔧 使用429错误检测的HTTP请求执行器
+	
 		resp, err = executeHTTPRequestWithRateLimit(req, client, accountID)
 		if err != nil {
+			log.Printf("❌ [%s] 下单请求发送失败: %v", accountID, err)
 			return err
 		}
 
 		body, err = io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return err
+		if err != nil {
+			log.Printf("❌ [%s] 读取下单响应失败: %v", accountID, err)
+			return err
+		}
+		
+
+		
+		return nil
 	}, "PlaceOrder", accountID)
 
 	if err != nil {
+		log.Printf("❌ [%s] 下单API调用失败: %v", accountID, err)
 		return "", false
 	}
+	
+	// 注意：下单后不添加延迟，确保价格有效性和快速执行交易
 
 	// 解析响应获取订单ID
 	var orderResp map[string]interface{}
 	if err := json.Unmarshal(body, &orderResp); err != nil {
-
+		log.Printf("❌ [%s] 解析下单响应JSON失败: %v", accountID, err)
 		return "", resp.StatusCode == 200
 	}
 
 	if resp.StatusCode == 200 {
 		// 检查是否有错误码
 		if code, exists := orderResp["code"]; exists {
+			log.Printf("📋 [%s] 下单响应码: %v", accountID, code)
+			
 			if code != "000000" && code != 0 {
+				// 记录错误信息
+				message := "未知错误"
+				if msg, ok := orderResp["message"].(string); ok {
+					message = msg
+				}
+				log.Printf("❌ [%s] 下单失败，错误码: %v, 错误信息: %s", accountID, code, message)
 
 				// 特殊错误处理
 				if code == "481020" {
-
+					log.Printf("❌ [%s] 余额不足，无法下单", accountID)
 					// 余额不足直接返回特殊标识，避免无意义重试
 					return "INSUFFICIENT_BALANCE", false
 				}
@@ -2253,8 +3009,14 @@ func placeOrderWithID(order OrderRequest) (string, bool) {
 				// 检查认证失效
 				if strings.Contains(fmt.Sprintf("%v", orderResp["message"]), "请检查是否已登录") ||
 					strings.Contains(fmt.Sprintf("%v", orderResp["message"]), "请求失败") {
-					log.Printf("🚨 认证失效，停止下单")
+					log.Printf("🚨 [%s] 认证失效，停止下单", accountID)
 					return "AUTH_FAILED", false
+				}
+				
+				// 检查是否有异步操作冲突
+				if strings.Contains(fmt.Sprintf("%v", orderResp["message"]), "该账户有异步操作进行中") {
+					log.Printf("⚠️ [%s] 检测到异步操作冲突: %s", accountID, orderResp["message"])
+					return "ASYNC_CONFLICT", false
 				}
 
 				return "", false
@@ -2264,11 +3026,14 @@ func placeOrderWithID(order OrderRequest) (string, bool) {
 		// 尝试多种方式获取订单ID
 		orderID := extractOrderID(orderResp)
 		if orderID != "" {
+			log.Printf("✅ [%s] 下单成功，订单ID: %s", accountID, orderID)
 			return orderID, true
 		}
+		log.Printf("⚠️ [%s] 下单成功但无法获取订单ID，使用unknown", accountID)
 		return "unknown", true
 	}
 
+	log.Printf("❌ [%s] 下单失败，HTTP状态码: %d", accountID, resp.StatusCode)
 	return "", false
 }
 
@@ -2320,7 +3085,13 @@ func cancelOrder(orderID, symbol, csrftoken, cookie string) bool {
 		return nil
 	}, "CancelOrder", accountID)
 
-	return err == nil && success
+	// 订单取消成功，无需额外延迟
+	if err == nil && success {
+		log.Printf("✅ [%s] 订单取消成功", accountID)
+		return true
+	}
+
+	return false
 }
 
 // cancelAllOrders 取消所有订单
@@ -2719,7 +3490,7 @@ func startAutoLoop(req *TradeRequest) {
 		if reachedTarget {
 			log.Printf("✅ [%s] 达到目标交易额，执行最终卖出确保", req.AccountID)
 
-			// 🔧 新增：确保最后一笔是卖单且没有残留
+			// 🔧 确保最后一笔是卖单且没有残留
 			if err := ensureFinalSellAndCleanup(req); err != nil {
 				log.Printf("⚠️ [%s] 最终卖出确保失败: %v", req.AccountID, err)
 			}
@@ -2790,8 +3561,25 @@ func startAutoLoop(req *TradeRequest) {
 
 				// 其他错误继续重试
 				if !response.Success {
-					log.Printf("⚠️ [%s] 交易失败，等待10秒后继续重试: %s", req.AccountID, response.Message)
-					time.Sleep(10 * time.Second)
+					if strings.Contains(response.Message, "该账户有异步操作进行中") {
+						// 检测到异步操作冲突，增加等待时间并智能处理
+						log.Printf("⏳ [%s] 检测到异步操作冲突，等待30秒后重试: %s", req.AccountID, response.Message)
+						
+						// 检查是否是强制卖出操作
+						state := getAccountAsyncState(req.AccountID)
+						if state.HasAsyncDecrement {
+							log.Printf("🔄 [%s] 正在进行强制递减卖出，等待操作完成...", req.AccountID)
+							// 等待更长时间，让强制卖出完成
+							time.Sleep(30 * time.Second)
+						} else {
+							// 其他异步操作，等待标准时间
+							time.Sleep(15 * time.Second)
+						}
+					} else {
+						// 其他错误，使用标准等待时间
+						log.Printf("⚠️ [%s] 交易失败，等待10秒后继续重试: %s", req.AccountID, response.Message)
+						time.Sleep(10 * time.Second)
+					}
 				}
 			}
 		case <-stopChan:
@@ -3280,7 +4068,8 @@ func smartSellWithRetry(req *TradeRequest, buyPrice, tokenAmount float64, startT
 	}
 
 	// 获取当前市场价格
-	currentMarketPrice, err := price.GetTokenPriceWithPrecision(req.TokenAddress, getChainID(req), req.PricePrecision)
+	priceMode := getPriceMode(req)
+	currentMarketPrice, err := price.GetTokenPriceWithPrecisionAndMode(req.TokenAddress, getChainID(req), req.PricePrecision, priceMode)
 	if err != nil {
 
 		return TradeResponse{Success: false, Message: "获取当前价格失败"}
@@ -3370,23 +4159,63 @@ func smartSellWithRetry(req *TradeRequest, buyPrice, tokenAmount float64, startT
 	}, req.AccountID)
 
 	if !sellSuccess {
+		// 首先检查代币是否已被其他流程卖出
+		if isTokenSold(req.AccountID, req.TokenAddress) {
+			status := getTokenSellStatus(req.AccountID, req.TokenAddress)
+			log.Printf("✅ [%s] 代币已被其他流程卖出，无需重试 - 方式: %s, 价格: %.8f, 数量: %.6f", 
+				req.AccountID, status.SoldBy, status.SoldPrice, status.SoldAmount)
+			
+			// 返回成功响应，避免继续尝试卖出
+			return TradeResponse{
+				Success:     true,
+				Message:     fmt.Sprintf("代币已被%s方式卖出，无需重试", status.SoldBy),
+				BuyPrice:    buyPrice,
+				SellPrice:   status.SoldPrice,
+				TokenAmount: status.SoldAmount,
+				Profit:      (status.SoldPrice - buyPrice) * status.SoldAmount,
+				ExecuteTime: time.Since(startTime).Milliseconds(),
+			}
+		}
+		
+		// 再次检查代币余额，确认是否还有可卖代币
+		tokenBalance, balErr := getTokenBalance(req.TokenAddress, req.Csrftoken, req.Cookie)
+		if balErr == nil {
+			freeAmount, _ := strconv.ParseFloat(tokenBalance.Free, 64)
+			if freeAmount <= 0 {
+				log.Printf("✅ [%s] 代币余额为0，可能已被卖出，无需重试", req.AccountID)
+				// 设置代币已卖出状态，但卖出方式未知
+				setTokenSold(req.AccountID, req.TokenAddress, "unknown", currentMarketPrice, sellTokenAmount)
+				return TradeResponse{
+					Success:     true,
+					Message:     "代币余额为0，无需重试",
+					BuyPrice:    buyPrice,
+					SellPrice:   currentMarketPrice,
+					TokenAmount: sellTokenAmount,
+					Profit:      (currentMarketPrice - buyPrice) * sellTokenAmount,
+					ExecuteTime: time.Since(startTime).Milliseconds(),
+				}
+			} else if freeAmount < sellTokenAmount {
+				log.Printf("📊 [%s] 更新卖出数量: %.6f → %.6f (使用当前可用余额)", 
+					req.AccountID, sellTokenAmount, freeAmount)
+				sellTokenAmount = freeAmount
+			}
+		}
+
+		// 处理余额不足错误
 		if sellOrderID == "INSUFFICIENT_BALANCE" {
-
-			// 余额不足时也要进入递减重试，确保代币被卖出
-		} else {
-
+			log.Printf("⚠️ [%s] 余额不足错误，可能代币已被卖出或数量不足", req.AccountID)
 		}
 
 		// 🔧 修正：保持递减重试流程，但刷量模式优化时间
 		if currentMarketPrice > buyPrice {
 			// 有利润或等价：递减重试策略
-			log.Printf("⏰ [%s] 主卖出失败，开始优化递减重试(万1→百10)...", req.AccountID)
+			log.Printf("⏰ [%s] 主卖出失败，进入递减重试策略", req.AccountID)
 			return executeDecrementRetry(req, buyPrice, sellTokenAmount, currentMarketPrice, startTime)
 		} else {
 			// 亏损情况：直接进入千8挂单
 			loss := (buyPrice - currentMarketPrice) / buyPrice
 			if loss > 0.1 { // 磨损 > 百10
-				log.Printf("⏰ [%s] 主卖出失败且磨损>百10，直接千8挂单", req.AccountID)
+				log.Printf("⏰ [%s] 主卖出失败且磨损>百10，进入千8挂单", req.AccountID)
 				return hangOrderAtQian8Loss(req, buyPrice, sellTokenAmount, startTime)
 			} else {
 				log.Printf("⏰ [%s] 主卖出失败但磨损≤百10，递减重试", req.AccountID)
@@ -3451,14 +4280,10 @@ func smartSellWithRetry(req *TradeRequest, buyPrice, tokenAmount float64, startT
 		}
 	}
 
-	// 30秒后未成交，开始降价重试流程
-	log.Printf("⏰ [%s] Initial sell timeout, starting retry process...", req.AccountID)
-
 	// 取消第一个订单（带重试）
 	cancelSuccess := false
 	for attempt := 1; attempt <= 3; attempt++ {
 		if cancelOrder(sellOrderID, req.BaseAsset+"USDT", req.Csrftoken, req.Cookie) {
-			log.Printf("🗑️ [%s] Initial sell order canceled", req.AccountID)
 			cancelSuccess = true
 			break
 		} else if attempt < 3 {
@@ -3467,6 +4292,34 @@ func smartSellWithRetry(req *TradeRequest, buyPrice, tokenAmount float64, startT
 	}
 	if !cancelSuccess {
 		log.Printf("🚨 [%s] 警告：可能存在未取消的卖单，请人工检查", req.AccountID)
+	}
+	
+	// 🔧 修复：撤销订单后等待足够时间，确保币安释放锁定的代币余额
+	log.Printf("⏳ [%s] 撤销订单后等待2秒，确保代币余额完全释放", req.AccountID)
+	time.Sleep(2 * time.Second)
+	
+	// 再次检查代币余额，确认是否已释放
+	tokenBalance, balErr := getTokenBalance(req.TokenAddress, req.Csrftoken, req.Cookie)
+	if balErr == nil {
+		freeAmount, _ := strconv.ParseFloat(tokenBalance.Free, 64)
+		lockedAmount, _ := strconv.ParseFloat(tokenBalance.Locked, 64)
+		log.Printf("📊 [%s] 等待后代币余额: 可用=%.6f, 锁定=%.6f", 
+			req.AccountID, freeAmount, lockedAmount)
+		
+		// 如果代币仍然被锁定，再等待1秒
+		if freeAmount <= 0 && lockedAmount > 0 {
+			log.Printf("⏳ [%s] 代币仍然被锁定，额外等待1秒", req.AccountID)
+			time.Sleep(1 * time.Second)
+			
+			// 再次检查余额
+			tokenBalance, balErr = getTokenBalance(req.TokenAddress, req.Csrftoken, req.Cookie)
+			if balErr == nil {
+				freeAmount, _ = strconv.ParseFloat(tokenBalance.Free, 64)
+				lockedAmount, _ = strconv.ParseFloat(tokenBalance.Locked, 64)
+				log.Printf("📊 [%s] 额外等待后代币余额: 可用=%.6f, 锁定=%.6f", 
+					req.AccountID, freeAmount, lockedAmount)
+			}
+		}
 	}
 
 	// 🔧 新增：在递减重试前检查智能止损
@@ -3682,39 +4535,16 @@ func smartSellWithRetry(req *TradeRequest, buyPrice, tokenAmount float64, startT
 				Profit:      -marketLoss,
 			}
 		} else {
-			log.Printf("🚨 [%s] 市场价强制卖出也失败，启动最终兜底：异步递减万1", req.AccountID)
+			log.Printf("🚨 [%s] 市场价强制卖出也失败，将由其他兜底机制处理", req.AccountID)
+			
+			// 更新最后交易时间，确保系统可以继续其他操作
+			updateLastTradeTime(req.AccountID)
 
-			// 🔧 增强：检查是否已有异步任务，避免重复启动
-			if markTokenProcessing(req.AccountID, req.TokenAddress) {
-				// 最终兜底：异步递减万1策略，确保代币最终被卖出
-				go func() {
-					defer unmarkTokenProcessing(req.AccountID, req.TokenAddress)
-
-					// 🔧 新增：设置超时控制，避免无限运行
-					timeout := time.After(10 * time.Minute) // 10分钟超时
-					done := make(chan bool, 1)
-
-					go func() {
-						asyncFastDecrement(req, buyPrice, sellTokenAmount, currentMarketPrice)
-						done <- true
-					}()
-
-					select {
-					case <-done:
-						log.Printf("✅ [%s] 异步递减万1完成", req.AccountID)
-					case <-timeout:
-						log.Printf("⏰ [%s] 异步递减万1超时，强制结束", req.AccountID)
-					}
-				}()
-			} else {
-				log.Printf("⚠️ [%s] 代币已被其他异步任务处理，跳过递减万1", req.AccountID)
-			}
-
-			// 返回特殊状态，表示已启动异步处理
+			// 返回特殊状态，表示已由其他兜底机制处理
 			marketLoss := (buyPrice - currentMarketPrice) * sellTokenAmount
 			return TradeResponse{
-				Success:     true, // 标记为成功，因为已启动异步处理
-				Message:     "市场价失败，已启动异步兜底",
+				Success:     true, // 标记为成功，因为已由其他兜底机制处理
+				Message:     "市场价失败，由其他兜底机制处理",
 				BuyPrice:    buyPrice,
 				SellPrice:   currentMarketPrice,
 				TokenAmount: sellTokenAmount,
@@ -3977,36 +4807,76 @@ func retryBuyWithNewPriceAttempt(req *TradeRequest, startTime time.Time, retryAt
 
 	log.Printf("🔄 [%s] 重新获取价格重试买入 (第%d/%d次)", req.AccountID, retryAttempt, maxBuyRetries)
 
-	// 1. 重新获取实时价格
-	log.Printf("📡 [%s] Fetching fresh price for retry", req.AccountID)
-	newPrice, err := price.GetTokenPriceWithPrecision(req.TokenAddress, getChainID(req), req.PricePrecision)
+	// 1. 重新获取实时价格 - 使用买单专用价格模式
+	log.Printf("📡 [%s] 重试买单：获取最新价格 (第%d次)", req.AccountID, retryAttempt)
+	buyPriceMode := getBuyPriceMode(req)
+	newPrice, err := price.GetTokenPriceWithPrecisionAndMode(req.TokenAddress, getChainID(req), req.PricePrecision, buyPriceMode)
 	if err != nil {
-		// 🔥 刷量优化：价格获取失败快速重试
-		if retryAttempt < maxBuyRetries {
-			var priceRetryWait time.Duration
-			if isVolumeMode {
-				priceRetryWait = 2 * time.Second // 刷量模式：2秒快速重试
-			} else {
-				priceRetryWait = 5 * time.Second // 正常模式：5秒
+		// 🔧 重试时的降级策略
+		log.Printf("⚠️ [%s] 重试价格获取失败(模式:%s)，尝试降级: %v", req.AccountID, buyPriceMode, err)
+
+		// 降级到combined模式
+		newPrice, err = price.GetTokenPriceWithPrecisionAndMode(req.TokenAddress, getChainID(req), req.PricePrecision, price.PriceModeCombined)
+		if err != nil {
+			// 🔥 刷量优化：价格获取失败快速重试
+			if retryAttempt < maxBuyRetries {
+				var priceRetryWait time.Duration
+				if isVolumeMode {
+					priceRetryWait = 2 * time.Second // 刷量模式：2秒快速重试
+				} else {
+					priceRetryWait = 5 * time.Second // 正常模式：5秒
+				}
+				log.Printf("⚠️ [%s] 所有价格模式失败，等待%v后重试 (%d/%d): %v", req.AccountID, priceRetryWait, retryAttempt, maxBuyRetries, err)
+				time.Sleep(priceRetryWait)
+				return retryBuyWithNewPriceAttempt(req, startTime, retryAttempt+1)
 			}
-			log.Printf("⚠️ [%s] 价格获取失败，等待%v后重试 (%d/%d): %v", req.AccountID, priceRetryWait, retryAttempt, maxBuyRetries, err)
-			time.Sleep(priceRetryWait)
-			return retryBuyWithNewPriceAttempt(req, startTime, retryAttempt+1)
+			return TradeResponse{Success: false, Message: "Failed to get fresh price for retry: " + err.Error()}
+		} else {
+			log.Printf("✅ [%s] 重试降级到combined模式成功: %.8f", req.AccountID, newPrice)
 		}
-		return TradeResponse{Success: false, Message: "Failed to get fresh price for retry: " + err.Error()}
+	} else {
+		log.Printf("✅ [%s] 重试价格获取成功(模式:%s): %.8f", req.AccountID, buyPriceMode, newPrice)
 	}
 
-	// 重试买单价格也加万一提高成交率
-	retryBuyPrice := newPrice * 1.0001 // 加万分之1
+	// 2. 计算重试买入价格（更激进的加价策略）
+	var retryBuyPrice float64
+	if isVolumeMode {
+		// 🔥 刷量模式：更激进的加价，确保成交
+		retryBuyPrice = newPrice * (1.0003 + float64(retryAttempt)*0.0001) // 基础万三 + 每次重试增加万一
+		log.Printf("🔥 [%s] 刷量模式重试买入价格: %.12f (第%d次重试，加价%.4f%%)", req.AccountID, retryBuyPrice, retryAttempt, (retryBuyPrice/newPrice-1)*100)
+	} else {
+		// 正常模式：根据价格模式调整重试策略
+		switch buyPriceMode {
+		case price.PriceModeMarket:
+			// 链上模式：更激进加价，因为是真实成交价
+			retryBuyPrice = newPrice * (1.0003 + float64(retryAttempt)*0.0001) // 基础万三 + 递增
+			log.Printf("💰 [%s] 链上模式重试买入价格: %.12f (第%d次重试，加价%.4f%%)", req.AccountID, retryBuyPrice, retryAttempt, (retryBuyPrice/newPrice-1)*100)
+		case price.PriceModeLimit:
+			// 限价模式：适中加价
+			retryBuyPrice = newPrice * (1.0002 + float64(retryAttempt)*0.00005) // 基础万二 + 递增
+			log.Printf("💰 [%s] 限价模式重试买入价格: %.12f (第%d次重试，加价%.4f%%)", req.AccountID, retryBuyPrice, retryAttempt, (retryBuyPrice/newPrice-1)*100)
+		default:
+			// 其他模式：渐进式加价
+			retryBuyPrice = newPrice * (1.0002 + float64(retryAttempt)*0.0001) // 基础万二 + 递增
+			log.Printf("💰 [%s] 综合模式重试买入价格: %.12f (第%d次重试，加价%.4f%%)", req.AccountID, retryBuyPrice, retryAttempt, (retryBuyPrice/newPrice-1)*100)
+		}
+	}
 	retryBuyPrice = adjustPricePrecision(retryBuyPrice, req.PricePrecision)
-	log.Printf("💰 [%s] Fresh market price: %.*f, retry buy price: %.*f (+万1)",
-		req.AccountID, req.PricePrecision, newPrice, req.PricePrecision, retryBuyPrice)
 
 	// 2. 重新计算数量和金额（使用加价后的买入价格）
-	idealTokenAmount := req.USDTAmount / retryBuyPrice
+	// 🔧 重试时也使用固定参数传递的数值，不再使用随机浮动
+	adjustedRetryUSDTAmount := req.USDTAmount
+
+	log.Printf("📊 [%s] 重试买入量使用固定值: %.6f USDT (不再使用随机浮动)",
+		req.AccountID, adjustedRetryUSDTAmount)
+
+	idealTokenAmount := adjustedRetryUSDTAmount / retryBuyPrice
 	tokenAmount := float64(int(idealTokenAmount))
 	calculatedAmount := retryBuyPrice * tokenAmount
 	exactAmount := math.Round(calculatedAmount*100000000) / 100000000
+
+	// 🔧 记录重试时实际使用的USDT金额
+	retryActualUSDTUsed := exactAmount
 
 	// 验证精度匹配
 	verification := math.Round((retryBuyPrice*tokenAmount)*100000000) / 100000000
@@ -4151,16 +5021,15 @@ func retryBuyWithNewPriceAttempt(req *TradeRequest, startTime time.Time, retryAt
 		}
 
 		// 所有重试都失败
+		log.Printf("❌ [%s] 买单重试%d次均失败，停止交易", req.AccountID, maxBuyRetries)
 		return TradeResponse{Success: false, Message: fmt.Sprintf("买单重试%d次均失败，已取消订单", maxBuyRetries)}
-
-		return TradeResponse{Success: false, Message: "Retry buy order timeout, please check manually"}
 	}
 
 	// 6. 买入成功，统计交易额并继续卖出流程
 	log.Printf("✅ [%s] Retry buy successful, proceeding to sell", req.AccountID)
 
 	// 🔧 修复：重试买单成功后需要统计交易额（使用防重复机制）
-	buyInCost := newPrice * tokenAmount
+	buyInCost := retryActualUSDTUsed // 🎲 使用重试时实际花费的USDT金额
 
 	// 🔧 新增：重试买单成功后立即统计买入交易额（防重复）
 	if buyInCost > 0 && tokenAmount > 0 {
@@ -4328,6 +5197,25 @@ func max(a, b int) int {
 // sellAtMarketPrice 按市场价卖出
 func sellAtMarketPrice(req *TradeRequest, buyPrice, sellTokenAmount, marketPrice float64, startTime time.Time) TradeResponse {
 	log.Printf("💰 [%s] 按市场价卖出: %.12f", req.AccountID, marketPrice)
+	
+	// 🚨 修改：提高最低价值阈值，避免币安拒绝下单
+	tokenValue := marketPrice * sellTokenAmount
+	if tokenValue < 1.0 { // 如果代币总价值低于1.0 USDT，则中断卖出
+		log.Printf("💸 [%s] 代币价值过低(%.8f USDT < 1.0 USDT)，币安会拒绝下单，跳过卖出操作", 
+			req.AccountID, tokenValue)
+		log.Printf("📊 [%s] 代币详情: 数量=%.6f, 价格=%.8f", req.AccountID, sellTokenAmount, marketPrice)
+		// 更新最后交易时间，确保系统可以继续其他操作
+		updateLastTradeTime(req.AccountID)
+		return TradeResponse{
+			Success:     true, // 标记为成功，避免系统继续尝试卖出
+			Message:     "代币价值过低(< 1.0 USDT)，币安会拒绝下单，跳过卖出操作",
+			BuyPrice:    buyPrice,
+			SellPrice:   marketPrice,
+			TokenAmount: sellTokenAmount,
+			Profit:      0,
+			ExecuteTime: time.Since(startTime).Milliseconds(),
+		}
+	}
 
 	// 按币安规定调整代币数量
 	adjustedTokenAmount := adjustTokenAmountForBinance(marketPrice, sellTokenAmount, req.PricePrecision)
@@ -4341,31 +5229,167 @@ func sellAtMarketPrice(req *TradeRequest, buyPrice, sellTokenAmount, marketPrice
 	expectedValue = math.Round(expectedValue*100000000) / 100000000
 	log.Printf("🔍 [%s] 市场价验证: 价格 %.12f × 数量 %.0f = %.8f USDT",
 		req.AccountID, marketPrice, sellTokenAmount, expectedValue)
-
-	sellOrderID, sellSuccess := placeOrderWithRetry(OrderRequest{
-		BaseAsset:  req.BaseAsset,
-		QuoteAsset: "USDT",
-		Side:       "SELL",
-		Price:      marketPrice,
-		Quantity:   sellTokenAmount,
-		PaymentDetails: []PaymentDetail{{
-			Amount:            sellTokenAmount,
-			AmountStr:         fmt.Sprintf("%.6f", sellTokenAmount), // 🔧 修复：保留6位小数
-			PaymentWalletType: "ALPHA",
-		}},
-		Csrftoken: req.Csrftoken,
-		Cookie:    req.Cookie,
-	}, req.AccountID)
-
-	if !sellSuccess {
-		if sellOrderID == "INSUFFICIENT_BALANCE" {
-			log.Printf("⚠️ [%s] 市场价卖出精度问题，减少代币数量重试", req.AccountID)
-			// 减少代币数量重试
-			reducedAmount := math.Floor(sellTokenAmount * 0.99)
-			if reducedAmount >= 1 {
-				return sellAtMarketPrice(req, buyPrice, reducedAmount, marketPrice, startTime)
+		
+	// 🔧 修复：在下单前检查代币余额是否被锁定
+	tokenBalance, balErr := getTokenBalance(req.TokenAddress, req.Csrftoken, req.Cookie)
+	if balErr == nil {
+		freeAmount, _ := strconv.ParseFloat(tokenBalance.Free, 64)
+		lockedAmount, _ := strconv.ParseFloat(tokenBalance.Locked, 64)
+		
+		if freeAmount <= 0 && lockedAmount > 0 {
+			log.Printf("⏳ [%s] 代币余额已锁定，等待1秒后再尝试", req.AccountID)
+			// 等待1秒，让币安释放锁定的代币
+			time.Sleep(1 * time.Second)
+			
+			// 重新检查余额
+			tokenBalance, balErr = getTokenBalance(req.TokenAddress, req.Csrftoken, req.Cookie)
+			if balErr == nil {
+				freeAmount, _ = strconv.ParseFloat(tokenBalance.Free, 64)
+				lockedAmount, _ = strconv.ParseFloat(tokenBalance.Locked, 64)
+				log.Printf("📊 [%s] 等待后代币余额: 可用=%.6f, 锁定=%.6f", 
+					req.AccountID, freeAmount, lockedAmount)
+				
+				if freeAmount <= 0 {
+					if lockedAmount > 0 {
+						log.Printf("⚠️ [%s] 代币仍然被锁定，可能有其他订单正在处理", req.AccountID)
+					} else {
+						log.Printf("✅ [%s] 代币余额为0，可能已被卖出", req.AccountID)
+						// 设置代币已卖出状态
+						setTokenSold(req.AccountID, req.TokenAddress, "unknown", marketPrice, sellTokenAmount)
+					}
+					
+					return TradeResponse{
+						Success:     true,
+						Message:     "代币余额不可用，跳过市场价卖出",
+						BuyPrice:    buyPrice,
+						SellPrice:   marketPrice,
+						TokenAmount: sellTokenAmount,
+						Profit:      (marketPrice - buyPrice) * sellTokenAmount,
+						ExecuteTime: time.Since(startTime).Milliseconds(),
+					}
+				} else if freeAmount < sellTokenAmount {
+					log.Printf("📊 [%s] 市场价卖出更新数量: %.6f → %.6f (使用当前可用余额)", 
+						req.AccountID, sellTokenAmount, freeAmount)
+					sellTokenAmount = freeAmount
+				}
 			}
 		}
+	}
+
+	// 确保使用整数数量，避免精度问题
+	intAmount := math.Floor(sellTokenAmount) // 确保是整数
+	
+	// 统一使用整数格式的字符串，避免精度问题
+	strAmount := fmt.Sprintf("%.0f", intAmount)
+	
+	// 将字符串转回为整数，确保完全一致
+	exactAmount, _ := strconv.ParseInt(strAmount, 10, 64)
+	
+	// 使用整数作为数量，避免浮点数精度问题
+	log.Printf("🔢 [%s] 市场价卖出统一使用整数数量: %d", req.AccountID, exactAmount)
+	
+	// 构造请求体JSON字符串，确保数量字段完全一致
+	orderJSON := fmt.Sprintf(`{
+		"baseAsset": "%s",
+		"quoteAsset": "USDT",
+		"side": "SELL",
+		"price": %.8f,
+		"quantity": %s,
+		"paymentDetails": [
+			{
+				"amount": %s,
+				"paymentWalletType": "ALPHA"
+			}
+		]
+	}`, req.BaseAsset, marketPrice, strAmount, strAmount)
+	
+	// 解析为OrderRequest结构体
+	var orderReq OrderRequest
+	if err := json.Unmarshal([]byte(orderJSON), &orderReq); err != nil {
+		log.Printf("❌ [%s] 解析订单JSON失败: %v", req.AccountID, err)
+		// 使用备用方法构造请求
+		orderReq = OrderRequest{
+			BaseAsset:  req.BaseAsset,
+			QuoteAsset: "USDT",
+			Side:       "SELL",
+			Price:      marketPrice,
+			Quantity:   float64(exactAmount),
+			PaymentDetails: []PaymentDetail{{
+				Amount:            float64(exactAmount),
+				AmountStr:         strAmount,
+				PaymentWalletType: "ALPHA",
+			}},
+		}
+	}
+	
+	// 添加认证信息
+	orderReq.Csrftoken = req.Csrftoken
+	orderReq.Cookie = req.Cookie
+	
+	// 打印最终请求对象，确认字段一致性
+	log.Printf("📝 [%s] 最终订单对象 - Quantity: %v, PaymentDetails.Amount: %v, PaymentDetails.AmountStr: %s", 
+		req.AccountID, orderReq.Quantity, 
+		orderReq.PaymentDetails[0].Amount, 
+		orderReq.PaymentDetails[0].AmountStr)
+	
+	sellOrderID, sellSuccess := placeOrderWithRetry(orderReq, req.AccountID)
+
+	if !sellSuccess {
+		// 首先检查代币是否已被其他流程卖出
+		if isTokenSold(req.AccountID, req.TokenAddress) {
+			status := getTokenSellStatus(req.AccountID, req.TokenAddress)
+			log.Printf("✅ [%s] 市场价卖出失败，但代币已被其他流程卖出 - 方式: %s, 价格: %.8f, 数量: %.6f", 
+				req.AccountID, status.SoldBy, status.SoldPrice, status.SoldAmount)
+			
+			// 返回成功响应，避免继续尝试卖出
+			return TradeResponse{
+				Success:     true,
+				Message:     fmt.Sprintf("代币已被%s方式卖出，无需市场价卖出", status.SoldBy),
+				BuyPrice:    buyPrice,
+				SellPrice:   status.SoldPrice,
+				TokenAmount: status.SoldAmount,
+				Profit:      (status.SoldPrice - buyPrice) * status.SoldAmount,
+				ExecuteTime: time.Since(startTime).Milliseconds(),
+			}
+		}
+		
+		// 检查余额不足错误
+		if sellOrderID == "INSUFFICIENT_BALANCE" {
+			// 检查代币余额
+			tokenBalance, balErr := getTokenBalance(req.TokenAddress, req.Csrftoken, req.Cookie)
+			if balErr == nil {
+				freeAmount, _ := strconv.ParseFloat(tokenBalance.Free, 64)
+				if freeAmount <= 0 {
+					log.Printf("✅ [%s] 市场价卖出余额不足，代币余额为0，可能已被卖出", req.AccountID)
+					// 设置代币已卖出状态，但卖出方式未知
+					setTokenSold(req.AccountID, req.TokenAddress, "unknown", marketPrice, sellTokenAmount)
+					return TradeResponse{
+						Success:     true,
+						Message:     "代币余额为0，无需市场价卖出",
+						BuyPrice:    buyPrice,
+						SellPrice:   marketPrice,
+						TokenAmount: sellTokenAmount,
+						Profit:      (marketPrice - buyPrice) * sellTokenAmount,
+						ExecuteTime: time.Since(startTime).Milliseconds(),
+					}
+				} else if freeAmount < sellTokenAmount {
+					log.Printf("📊 [%s] 市场价卖出更新数量: %.6f → %.6f (使用当前可用余额)", 
+						req.AccountID, sellTokenAmount, freeAmount)
+					// 使用可用余额重试
+					return sellAtMarketPrice(req, buyPrice, freeAmount, marketPrice, startTime)
+				} else {
+					log.Printf("⚠️ [%s] 市场价卖出精度问题，减少代币数量重试", req.AccountID)
+					// 减少代币数量重试
+					reducedAmount := math.Floor(sellTokenAmount * 0.99)
+					if reducedAmount >= 1 {
+						return sellAtMarketPrice(req, buyPrice, reducedAmount, marketPrice, startTime)
+					}
+				}
+			}
+		}
+		
+		// 其他错误，返回失败
+		log.Printf("❌ [%s] 市场价卖出下单失败: %s", req.AccountID, sellOrderID)
 		return TradeResponse{Success: false, Message: "市场价卖出下单失败"}
 	}
 
@@ -4390,15 +5414,16 @@ func sellAtMarketPrice(req *TradeRequest, buyPrice, sellTokenAmount, marketPrice
 		}
 	}
 
-	// 市场价卖出超时，启动异步递减兜底处理
-	log.Printf("🚨 [%s] 市场价卖出超时，启动异步递减兜底处理", req.AccountID)
-	go asyncFastDecrement(req, buyPrice, sellTokenAmount, marketPrice)
+	// 市场价卖出超时，记录日志
+	log.Printf("🚨 [%s] 市场价卖出超时，将由其他兜底机制处理", req.AccountID)
+	// 更新最后交易时间，确保系统可以继续其他操作
+	updateLastTradeTime(req.AccountID)
 
-	// 返回特殊状态，表示已启动异步处理
+	// 返回特殊状态，表示已由其他兜底机制处理
 	marketLoss := (buyPrice - marketPrice) * sellTokenAmount
 	return TradeResponse{
-		Success:     true, // 标记为成功，因为已启动异步处理
-		Message:     "市场价超时，已启动异步兜底",
+		Success:     true, // 标记为成功，因为已由其他兜底机制处理
+		Message:     "市场价超时，由其他兜底机制处理",
 		BuyPrice:    buyPrice,
 		SellPrice:   marketPrice,
 		TokenAmount: sellTokenAmount,
@@ -4410,6 +5435,25 @@ func sellAtMarketPrice(req *TradeRequest, buyPrice, sellTokenAmount, marketPrice
 // hangOrderAsync 异步挂单处理
 func hangOrderAsync(req *TradeRequest, buyPrice, sellTokenAmount, hangPrice float64, startTime time.Time) TradeResponse {
 	log.Printf("📌 [%s] 挂百10价格: %.12f", req.AccountID, hangPrice)
+	
+	// 🚨 修改：提高最低价值阈值，避免币安拒绝下单
+	tokenValue := hangPrice * sellTokenAmount
+	if tokenValue < 1.0 { // 如果代币总价值低于1.0 USDT，则中断卖出
+		log.Printf("💸 [%s] 代币价值过低(%.8f USDT < 1.0 USDT)，币安会拒绝下单，跳过挂单操作", 
+			req.AccountID, tokenValue)
+		log.Printf("📊 [%s] 代币详情: 数量=%.6f, 价格=%.8f", req.AccountID, sellTokenAmount, hangPrice)
+		// 更新最后交易时间，确保系统可以继续其他操作
+		updateLastTradeTime(req.AccountID)
+		return TradeResponse{
+			Success:     true, // 标记为成功，避免系统继续尝试卖出
+			Message:     "代币价值过低(< 1.0 USDT)，币安会拒绝下单，跳过挂单操作",
+			BuyPrice:    buyPrice,
+			SellPrice:   hangPrice,
+			TokenAmount: sellTokenAmount,
+			Profit:      0,
+			ExecuteTime: time.Since(startTime).Milliseconds(),
+		}
+	}
 
 	sellOrderID, sellSuccess := placeOrderWithRetry(OrderRequest{
 		BaseAsset:  req.BaseAsset,
@@ -4427,7 +5471,101 @@ func hangOrderAsync(req *TradeRequest, buyPrice, sellTokenAmount, hangPrice floa
 	}, req.AccountID)
 
 	if !sellSuccess {
-		return TradeResponse{Success: false, Message: "挂单失败"}
+		// 检查是否是"余额不足"错误
+		if sellOrderID == "INSUFFICIENT_BALANCE" {
+			// 检查代币是否已被其他流程卖出
+			if isTokenSold(req.AccountID, req.TokenAddress) {
+				status := getTokenSellStatus(req.AccountID, req.TokenAddress)
+				log.Printf("✅ [%s] 挂单余额不足，但代币已被其他流程卖出 - 方式: %s, 价格: %.8f, 数量: %.6f", 
+					req.AccountID, status.SoldBy, status.SoldPrice, status.SoldAmount)
+				
+				// 返回成功响应，避免继续尝试卖出
+				return TradeResponse{
+					Success:     true,
+					Message:     fmt.Sprintf("代币已被%s方式卖出，无需挂单", status.SoldBy),
+					BuyPrice:    buyPrice,
+					SellPrice:   status.SoldPrice,
+					TokenAmount: status.SoldAmount,
+					Profit:      (status.SoldPrice - buyPrice) * status.SoldAmount,
+					ExecuteTime: time.Since(startTime).Milliseconds(),
+				}
+			}
+			
+			// 检查代币余额
+			tokenBalance, balErr := getTokenBalance(req.TokenAddress, req.Csrftoken, req.Cookie)
+			if balErr == nil {
+				freeAmount, _ := strconv.ParseFloat(tokenBalance.Free, 64)
+				lockedAmount, _ := strconv.ParseFloat(tokenBalance.Locked, 64)
+				
+				log.Printf("📊 [%s] 挂单余额不足，当前余额: 可用=%.6f, 锁定=%.6f", 
+					req.AccountID, freeAmount, lockedAmount)
+				
+				if freeAmount <= 0 && lockedAmount > 0 {
+					log.Printf("✅ [%s] 代币已全部锁定，可能已在挂单中", req.AccountID)
+					// 设置代币已卖出状态
+					setTokenSold(req.AccountID, req.TokenAddress, "pending", hangPrice, sellTokenAmount)
+					return TradeResponse{
+						Success:     true,
+						Message:     "代币已全部锁定，可能已在挂单中",
+						BuyPrice:    buyPrice,
+						SellPrice:   hangPrice,
+						TokenAmount: sellTokenAmount,
+						Profit:      (hangPrice - buyPrice) * sellTokenAmount,
+						ExecuteTime: time.Since(startTime).Milliseconds(),
+					}
+				}
+				
+				if freeAmount <= 0 && lockedAmount <= 0 {
+					log.Printf("✅ [%s] 代币余额为0，可能已被卖出", req.AccountID)
+					// 设置代币已卖出状态
+					setTokenSold(req.AccountID, req.TokenAddress, "unknown", hangPrice, sellTokenAmount)
+					return TradeResponse{
+						Success:     true,
+						Message:     "代币余额为0，可能已被卖出",
+						BuyPrice:    buyPrice,
+						SellPrice:   hangPrice,
+						TokenAmount: sellTokenAmount,
+						Profit:      (hangPrice - buyPrice) * sellTokenAmount,
+						ExecuteTime: time.Since(startTime).Milliseconds(),
+					}
+				}
+				
+				if freeAmount < sellTokenAmount {
+					log.Printf("📊 [%s] 挂单更新数量: %.6f → %.6f (使用当前可用余额)", 
+						req.AccountID, sellTokenAmount, freeAmount)
+					// 使用可用余额重试
+					return hangOrderAsync(req, buyPrice, freeAmount, hangPrice, startTime)
+				}
+			}
+		}
+		
+		// 检查是否是"incorrect price or amount"错误
+		if strings.Contains(sellOrderID, "incorrect price or amount") {
+			log.Printf("⚠️ [%s] 币安拒绝挂单(价格或数量不正确)，尝试使用forceCleanToken方法", req.AccountID)
+			
+			// 使用forceCleanToken方法，该方法更适合处理小额代币
+			go func() {
+				if err := forceCleanToken(req.TokenAddress, req.BaseAsset, req.Csrftoken, req.Cookie, 8); err != nil {
+					log.Printf("⚠️ [%s] forceCleanToken失败: %v", req.AccountID, err)
+				} else {
+					log.Printf("✅ [%s] forceCleanToken成功清理代币", req.AccountID)
+					// 设置代币已卖出状态
+					setTokenSold(req.AccountID, req.TokenAddress, "clean", hangPrice, sellTokenAmount)
+				}
+			}()
+			
+			return TradeResponse{
+				Success:     true,
+				Message:     "使用forceCleanToken方法处理代币",
+				BuyPrice:    buyPrice,
+				SellPrice:   hangPrice,
+				TokenAmount: sellTokenAmount,
+				Profit:      0,
+				ExecuteTime: time.Since(startTime).Milliseconds(),
+			}
+		}
+		
+		return TradeResponse{Success: false, Message: "挂单失败: " + sellOrderID}
 	}
 
 	// 启动异步监控
@@ -4468,9 +5606,11 @@ func monitorHangingOrder(req *TradeRequest, sellOrderID string, buyPrice, sellTo
 		select {
 		case <-timeout:
 			log.Printf("🚨 [%s] 异步监控绝对超时(1分钟)，强制处理: %s", req.AccountID, sellOrderID)
-			// 强制取消订单并启动异步递减
-			cancelOrder(sellOrderID, req.BaseAsset+"USDT", req.Csrftoken, req.Cookie)
-			go asyncFastDecrement(req, buyPrice, sellTokenAmount, hangPrice)
+				// 强制取消订单，由其他兜底机制处理
+	cancelOrder(sellOrderID, req.BaseAsset+"USDT", req.Csrftoken, req.Cookie)
+	log.Printf("🔄 [%s] 挂单监控超时，取消订单后由其他兜底机制处理", req.AccountID)
+	// 更新最后交易时间，确保系统可以继续其他操作
+	updateLastTradeTime(req.AccountID)
 			return
 		case <-ticker.C:
 			// 正常的1秒检查
@@ -4606,6 +5746,20 @@ func monitorHangingOrder(req *TradeRequest, sellOrderID string, buyPrice, sellTo
 // asyncFastDecrement 异步快速递减万1策略，确保代币能够卖出
 func asyncFastDecrement(req *TradeRequest, buyPrice, sellTokenAmount, startPrice float64) {
 	log.Printf("🔄 [%s] 异步开始快速递减策略，确保代币卖出", req.AccountID)
+	
+	// 先尝试重置账户所有异步状态，确保没有残留的状态
+	resetAccountAsyncState(req.AccountID)
+
+	// 🚨 修改：提高最低价值阈值，避免币安拒绝下单
+	tokenValue := startPrice * sellTokenAmount
+	if tokenValue < 1.0 { // 如果代币总价值低于1.0 USDT，则中断卖出
+		log.Printf("💸 [%s] 代币价值过低(%.8f USDT < 1.0 USDT)，币安会拒绝下单，跳过异步卖出", 
+			req.AccountID, tokenValue)
+		log.Printf("📊 [%s] 代币详情: 数量=%.6f, 价格=%.8f", req.AccountID, sellTokenAmount, startPrice)
+		// 更新最后交易时间，确保系统可以继续其他操作
+		updateLastTradeTime(req.AccountID)
+		return // 直接返回，不执行后续卖出操作
+	}
 
 	// 设置异步递减状态
 	setAccountAsyncState(req.AccountID, "decrement", true)
@@ -4642,20 +5796,32 @@ func asyncFastDecrement(req *TradeRequest, buyPrice, sellTokenAmount, startPrice
 		}
 
 		// 下单
-		newSellOrderID, newSellSuccess := placeOrderWithRetry(OrderRequest{
-			BaseAsset:  req.BaseAsset,
-			QuoteAsset: "USDT",
-			Side:       "SELL",
-			Price:      currentSellPrice,
-			Quantity:   sellTokenAmount,
-			PaymentDetails: []PaymentDetail{{
-				Amount:            sellTokenAmount,
-				AmountStr:         fmt.Sprintf("%.0f", sellTokenAmount),
-				PaymentWalletType: "ALPHA",
-			}},
-			Csrftoken: req.Csrftoken,
-			Cookie:    req.Cookie,
-		}, req.AccountID)
+			// 确保使用整数数量，避免精度问题
+	intAmount := math.Floor(sellTokenAmount) // 确保是整数
+	
+	// 统一使用整数格式的字符串，避免精度问题
+	strAmount := fmt.Sprintf("%.0f", intAmount)
+	
+	// 将字符串转回为整数，确保完全一致
+	exactAmount, _ := strconv.ParseInt(strAmount, 10, 64)
+	
+	// 使用整数作为数量，避免浮点数精度问题
+	log.Printf("🔢 [%s] 递减重试统一使用整数数量: %d", req.AccountID, exactAmount)
+	
+	newSellOrderID, newSellSuccess := placeOrderWithRetry(OrderRequest{
+		BaseAsset:  req.BaseAsset,
+		QuoteAsset: "USDT",
+		Side:       "SELL",
+		Price:      currentSellPrice,
+		Quantity:   float64(exactAmount), // 使用从整数转换的浮点数
+		PaymentDetails: []PaymentDetail{{
+			Amount:            float64(exactAmount), // 使用完全相同的值
+			AmountStr:         strAmount,            // 使用整数格式字符串
+			PaymentWalletType: "ALPHA",
+		}},
+		Csrftoken: req.Csrftoken,
+		Cookie:    req.Cookie,
+	}, req.AccountID)
 
 		if !newSellSuccess {
 			// 如果是余额不足，按币安规定调整数量
@@ -4689,52 +5855,64 @@ func asyncFastDecrement(req *TradeRequest, buyPrice, sellTokenAmount, startPrice
 		for i := 0; i < asyncWaitTime; i++ { // 动态等待时间
 			time.Sleep(200 * time.Millisecond)
 
-			if checkSellOrderHistory(newSellTime, req.Csrftoken, req.Cookie) {
-				log.Printf("✅ [%s] 异步递减重试成交 (第%d步)", req.AccountID, step+1)
+							if checkSellOrderHistory(newSellTime, req.Csrftoken, req.Cookie) {
+					log.Printf("✅ [%s] 异步递减重试成交 (第%d步)", req.AccountID, step+1)
 
-				// 🔧 修正：异步递减成交需要统计买入交易额
-				buyInCost := buyPrice * sellTokenAmount              // 买入成本
-				sellOutRevenue := currentSellPrice * sellTokenAmount // 卖出收入
-				netLoss := buyInCost - sellOutRevenue                // 净损益
+					// 设置代币已卖出状态，供其他流程检查
+					setTokenSold(req.AccountID, req.TokenAddress, "async", currentSellPrice, sellTokenAmount)
 
-				actualBuyVolume := buyInCost // 真实的买单金额
+					// 🔧 修正：异步递减成交需要统计买入交易额
+					buyInCost := buyPrice * sellTokenAmount              // 买入成本
+					sellOutRevenue := currentSellPrice * sellTokenAmount // 卖出收入
+					netLoss := buyInCost - sellOutRevenue                // 净损益
 
-				// 生成唯一交易ID防止重复统计
-				tradeID := generateTradeID(req.AccountID, req.TokenAddress, buyPrice, sellTokenAmount)
-				updateAccountStatsWithID(req.AccountID, actualBuyVolume, netLoss, tradeID)
+					actualBuyVolume := buyInCost // 真实的买单金额
 
-				if netLoss > 0 {
-					log.Printf("📊 [%s] 异步递减成交统计: 买单金额=%.6f USDT, 亏损=%.6f USDT",
-						req.AccountID, actualBuyVolume, netLoss)
-				} else {
-					log.Printf("📊 [%s] 异步递减成交统计: 买单金额=%.6f USDT, 盈利=%.6f USDT",
-						req.AccountID, actualBuyVolume, -netLoss)
+					// 生成唯一交易ID防止重复统计
+					tradeID := generateTradeID(req.AccountID, req.TokenAddress, buyPrice, sellTokenAmount)
+					updateAccountStatsWithID(req.AccountID, actualBuyVolume, netLoss, tradeID)
+
+					if netLoss > 0 {
+						log.Printf("📊 [%s] 异步递减成交统计: 买单金额=%.6f USDT, 亏损=%.6f USDT",
+							req.AccountID, actualBuyVolume, netLoss)
+					} else {
+						log.Printf("📊 [%s] 异步递减成交统计: 买单金额=%.6f USDT, 盈利=%.6f USDT",
+							req.AccountID, actualBuyVolume, -netLoss)
+					}
+
+					sellConfirmed = true
+					break
 				}
-
-				sellConfirmed = true
-				break
-			}
 		}
 
 		if sellConfirmed {
 			return // 成交成功，结束
 		}
 
-		// 必须取消当前订单，否则代币被锁定
-		log.Printf("⏰ [%s] 异步递减第%d步未成交，取消订单: %s", req.AccountID, step+1, newSellOrderID)
+			// 必须取消当前订单，否则代币被锁定
+	log.Printf("⏰ [%s] 异步递减第%d步未成交，取消订单: %s", req.AccountID, step+1, newSellOrderID)
 
-		for attempt := 1; attempt <= 3; attempt++ {
-			if cancelOrder(newSellOrderID, req.BaseAsset+"USDT", req.Csrftoken, req.Cookie) {
-				log.Printf("✅ [%s] 异步递减订单取消成功 (尝试%d次)", req.AccountID, attempt)
-				break
-			} else {
-				if attempt < 3 {
-					time.Sleep(100 * time.Millisecond)
-				}
+	cancelSuccess := false
+	for attempt := 1; attempt <= 3; attempt++ {
+		if cancelOrder(newSellOrderID, req.BaseAsset+"USDT", req.Csrftoken, req.Cookie) {
+			log.Printf("✅ [%s] 异步递减订单取消成功 (尝试%d次)", req.AccountID, attempt)
+			cancelSuccess = true
+			break
+		} else {
+			if attempt < 3 {
+				time.Sleep(200 * time.Millisecond) // 增加重试间隔
 			}
 		}
-
-		time.Sleep(100 * time.Millisecond) // 等待取消完成
+	}
+	
+	// 如果订单取消成功，等待1秒确保系统状态完全更新
+	if cancelSuccess {
+		log.Printf("⏳ [%s] 异步递减订单已取消，等待1秒确保系统状态更新", req.AccountID)
+		time.Sleep(1 * time.Second)
+	} else {
+		// 取消失败，仍然等待一段时间
+		time.Sleep(300 * time.Millisecond)
+	}
 	}
 
 	// 最终兜底：强制按千1磨损卖出，确保代币不残留
@@ -4865,9 +6043,23 @@ type AccountAsyncState struct {
 }
 
 // 账户异步状态管理
+// TokenSellStatus 代币卖出状态
+type TokenSellStatus struct {
+	IsSold         bool      // 是否已卖出
+	SoldTime       time.Time // 卖出时间
+	SoldBy         string    // 卖出方式 (force/async/market)
+	SoldPrice      float64   // 卖出价格
+	SoldAmount     float64   // 卖出数量
+	LastUpdateTime time.Time // 最后更新时间
+}
+
 var (
 	accountAsyncStates = make(map[string]*AccountAsyncState)
 	asyncStateMutex    sync.RWMutex
+	
+	// 代币卖出状态管理
+	tokenSellStatuses = make(map[string]*TokenSellStatus) // key: accountID_tokenAddress
+	sellStatusMutex   sync.RWMutex
 )
 
 // AutoSellTask 自动卖单任务（Flash Trade 内部使用）
@@ -4880,7 +6072,7 @@ type AutoSellTask struct {
 	CheckInterval int       `json:"check_interval"` // 检查间隔(秒)
 	SellPrice     float64   `json:"sell_price"`     // 卖出价格
 	ChainID       string    `json:"chain_id"`       // 区块链ID，默认为"56"(BSC)
-	IsActive      bool      `json:"is_active"`
+	IsActive      bool      `json:"is_active"`      // 是否活跃
 	StartTime     time.Time `json:"start_time"`
 	LastCheck     time.Time `json:"last_check"`
 	StopChan      chan bool `json:"-"`
@@ -4931,7 +6123,7 @@ var (
 // 交易间隔控制 - 币安安全刷量模式
 var (
 	lastTradeTime  = make(map[string]time.Time) // 每个账号的最后交易时间
-	tradeInterval  = 3 * time.Second            // 🛡️ 币安安全：3秒间隔（每分钟20单，安全范围）
+	tradeInterval  = 15 * time.Second           // 🛡️🚨 极度风控：15秒间隔（每分钟4单，极度保守）
 	tradeTimeMutex sync.RWMutex
 )
 
@@ -5168,7 +6360,7 @@ func handlePauseStatus(w http.ResponseWriter, r *http.Request) {
 // 🔧 优化：币安API调用频率控制（提升响应速度）
 var (
 	lastAPICall     time.Time
-	apiCallInterval = 50 * time.Millisecond // 优化：从100ms缩短到50ms，提升响应速度
+	apiCallInterval = 200 * time.Millisecond // 🚨 风控优化：大幅增加到200ms，避免风控
 	apiCallMutex    sync.Mutex
 )
 
@@ -5208,9 +6400,11 @@ func waitForAPIRateLimit() {
 	timeSinceLastCall := time.Since(lastAPICall)
 	var interval time.Duration
 	if isVolumeMode {
-		interval = 60 * time.Millisecond // 刷量安全模式：60ms间隔
+		// 🚀 动态刷量模式间隔（根据当前速度模式）
+		currentMode := getCurrentSpeedMode()
+		interval = currentMode.VolumeAPIInterval
 	} else {
-		interval = apiCallInterval // 正常模式：50ms间隔
+		interval = apiCallInterval // 正常模式：使用当前API间隔
 	}
 
 	if timeSinceLastCall < interval {
@@ -5237,7 +6431,7 @@ func getUserFirstName(csrftoken, cookie string) (string, error) {
 	// API调用频率限制
 	waitForAPIRateLimit()
 
-	log.Printf("🔍 查询用户KYC信息获取firstName")
+	
 
 	req, err := http.NewRequest("POST", "https://www.binance.com/bapi/kyc/v2/private/certificate/user-kyc/current-kyc-status", strings.NewReader("{}"))
 	if err != nil {
@@ -5760,15 +6954,132 @@ func forceSellToken(task *AutoSellTask) {
 
 // executeForceDecrementSell 执行强制递减卖出
 func executeForceDecrementSell(task *AutoSellTask, sellAmount float64, marketPrice float64) bool {
+	// 🚨 完全同步模式：强制重置所有异步状态，确保不会有冲突
+	log.Printf("🔄 [%s] 强制卖出开始 - 使用同步模式", task.AccountID)
+	
+	// 强制重置所有异步状态
+	resetAccountAsyncState(task.AccountID)
+	
+	// 不再设置异步状态标志，完全同步执行
+	log.Printf("🔒 [%s] 强制卖出使用同步模式，不设置异步状态", task.AccountID)
+	
+	// 从WebSocket获取最新价格（优先使用长连接返回的实时价格）
+	wsPrice, err := price.GetTokenPriceFromWebSocket(task.TokenAddress, getTaskChainID(task))
+	if err == nil && wsPrice > 0 {
+		// 如果成功从WebSocket获取到价格，使用该价格替换传入的marketPrice
+		log.Printf("📊 [%s] 使用WebSocket实时价格: %.8f (原价格: %.8f)", task.AccountID, wsPrice, marketPrice)
+		marketPrice = wsPrice
+	} else {
+		log.Printf("⚠️ [%s] WebSocket价格获取失败，使用传入价格: %.8f", task.AccountID, marketPrice)
+	}
+	
+	// 🚨 修改：设置最低价值阈值，避免币安拒绝下单
+	tokenValue := marketPrice * sellAmount
+	if tokenValue < 1.0 { // 如果代币总价值低于1.0 USDT，则中断卖出
+		log.Printf("💸 [%s] 代币价值过低(%.8f USDT < 1.0 USDT)，币安会拒绝下单，跳过卖出操作", 
+			task.AccountID, tokenValue)
+		log.Printf("📊 [%s] 代币详情: 数量=%.6f, 价格=%.8f", task.AccountID, sellAmount, marketPrice)
+		log.Printf("⚠️ [%s] 按要求：只有余额大于1u才启动卖出", task.AccountID)
+		// 更新最后交易时间，确保系统可以继续其他操作
+		updateLastTradeTime(task.AccountID)
+		return true // 返回true表示处理完成，避免系统继续尝试卖出
+	}
+	
+	// 获取买入价格（从任务中获取或从历史记录中获取）
+	buyPrice := getBuyPriceForToken(task.AccountID, task.TokenAddress)
+	
+	// 确定起始价格
+	var startPrice float64
+	if marketPrice > buyPrice && marketPrice > 0 {
+		// 如果当前市场价高于买入价，优先使用市场价
+		startPrice = marketPrice
+		log.Printf("💰 [%s] 市场价(%.8f)高于买入价(%.8f)，优先使用市场价", task.AccountID, marketPrice, buyPrice)
+	} else if buyPrice > 0 {
+		// 如果买入价有效，使用买入价
+		startPrice = buyPrice
+		log.Printf("💰 [%s] 使用买入价作为起始价格: %.8f", task.AccountID, buyPrice)
+	} else {
+		// 如果无法获取买入价，使用市场价的95%
+		startPrice = marketPrice * 0.95
+		log.Printf("💰 [%s] 无法获取买入价，使用市场价95%: %.8f", task.AccountID, startPrice)
+	}
 
-	// 使用传入的市场价作为起始价格
-	// 从市场价95%开始
-	startPrice := marketPrice * 0.95
+	// 新的递减策略：
+	// 1. 先尝试市场价或买入价（取较高者）
+	// 2. 如果失败，尝试买入价（如果第一步用的是市场价且市场价>买入价）
+	// 3. 然后开始递减：买入价的97%，93%，88%，80%，70%，60%，50%
+	var decrementRates []float64
+	
+	if marketPrice > buyPrice && buyPrice > 0 {
+		// 如果市场价高于买入价，第二步尝试买入价
+		decrementRates = []float64{1.0, buyPrice/startPrice, 0.97, 0.93, 0.88, 0.80, 0.70, 0.60, 0.50}
+	} else {
+		// 否则直接开始递减
+		decrementRates = []float64{1.0, 0.97, 0.93, 0.88, 0.80, 0.70, 0.60, 0.50}
+	}
 
-	// 递减策略：95% → 90% → 80% → 70% → 50% → 30% → 10% → 1% → 极低价
-	decrementRates := []float64{0.95, 0.93, 0.91, 0.88, 0.85, 0.75}
+	// 先检查并取消所有该代币的挂单，确保不会有多个订单同时存在
+	orders, err := getAccountOpenOrders(task.Csrftoken, task.Cookie)
+	if err == nil {
+		hasOrders := false
+		for _, order := range orders {
+			if strings.Contains(order.Symbol, task.BaseAsset) {
+				hasOrders = true
+				log.Printf("🗑️ [%s] 强制卖出前取消已有订单: %s, ID: %s", task.AccountID, order.Symbol, order.OrderID)
+				cancelOrder(order.OrderID, order.Symbol, task.Csrftoken, task.Cookie)
+				// 等待订单取消完成
+				time.Sleep(500 * time.Millisecond)
+			}
+		}
+		
+		// 如果有订单被取消，额外等待1秒确保系统状态完全更新
+		if hasOrders {
+			log.Printf("⏳ [%s] 订单已取消，等待1秒确保系统状态更新", task.AccountID)
+			time.Sleep(1 * time.Second)
+		}
+	}
 
 	for i, rate := range decrementRates {
+		// 首先检查代币是否已经被其他流程卖出
+		if isTokenSold(task.AccountID, task.TokenAddress) {
+			status := getTokenSellStatus(task.AccountID, task.TokenAddress)
+			log.Printf("✅ [%s] 代币已被其他流程卖出，停止强制卖出 - 方式: %s, 价格: %.8f, 数量: %.6f", 
+				task.AccountID, status.SoldBy, status.SoldPrice, status.SoldAmount)
+			updateLastTradeTime(task.AccountID)
+			return true // 代币已卖出，视为成功
+		}
+		
+		// 如果没有卖出记录，再检查代币余额，避免无效尝试
+		tokenBalance, balErr := getTokenBalance(task.TokenAddress, task.Csrftoken, task.Cookie)
+		if balErr != nil {
+			log.Printf("⚠️ [%s] 检查代币余额失败: %v，尝试继续卖出", task.AccountID, balErr)
+		} else {
+			freeAmount, _ := strconv.ParseFloat(tokenBalance.Free, 64)
+			if freeAmount <= 0 {
+				log.Printf("✅ [%s] 代币余额为0，可能已被卖出，停止强制卖出流程", task.AccountID)
+				// 设置代币已卖出状态，但卖出方式未知
+				setTokenSold(task.AccountID, task.TokenAddress, "unknown", marketPrice, sellAmount)
+				updateLastTradeTime(task.AccountID)
+				return true // 代币已卖出，视为成功
+			}
+			
+			// 再次检查代币价值
+			tokenValue := marketPrice * freeAmount
+			if tokenValue < 1.0 {
+				log.Printf("💸 [%s] 代币余额价值过低(%.8f USDT < 1.0 USDT)，停止强制卖出流程", 
+					task.AccountID, tokenValue)
+				updateLastTradeTime(task.AccountID)
+				return true // 代币价值过低，视为处理完成
+			}
+			
+			// 更新卖出数量为当前可用余额
+			if freeAmount < sellAmount {
+				log.Printf("📊 [%s] 更新卖出数量: %.6f → %.6f (使用当前可用余额)", 
+					task.AccountID, sellAmount, freeAmount)
+				sellAmount = freeAmount
+			}
+		}
+		
 		sellPrice := startPrice * rate
 		if sellPrice < 0.00000001 {
 			sellPrice = 0.00000001 // 最低价格
@@ -5777,21 +7088,185 @@ func executeForceDecrementSell(task *AutoSellTask, sellAmount float64, marketPri
 		log.Printf("🔄 [%s] 强制卖出第%d步: %s, 价格: %.8f (市场价%.0f%%)",
 			task.AccountID, i+1, task.TokenAddress, sellPrice, rate*100)
 
-		// 下单
-		orderID, success := placeOrderWithLimitedRetry(OrderRequest{
+			// 先检查代币是否已被其他流程卖出
+	if isTokenSold(task.AccountID, task.TokenAddress) {
+		status := getTokenSellStatus(task.AccountID, task.TokenAddress)
+		log.Printf("✅ [%s] 代币已被其他流程卖出，停止强制卖出 - 方式: %s, 价格: %.8f, 数量: %.6f", 
+			task.AccountID, status.SoldBy, status.SoldPrice, status.SoldAmount)
+		updateLastTradeTime(task.AccountID)
+		return true // 代币已卖出，视为成功
+	}
+	
+	// 下单 - 确保数量一致性
+	// 使用整数数量，避免精度问题
+	intSellAmount := math.Floor(sellAmount)
+	
+	// 只检查最小金额要求，不限制最小数量
+	adjustedTokenValue := sellPrice * intSellAmount
+	if adjustedTokenValue < 3.0 { // 🚨 设置最小价值要求为3 USDT
+		log.Printf("💸 [%s] 代币交易价值过低(%.2f USDT < 3.0 USDT)，币安可能拒绝下单", 
+			task.AccountID, adjustedTokenValue)
+		
+		// 如果价格太低，尝试增加数量来达到最小价值要求
+		if sellPrice > 0 {
+			neededAmount := math.Ceil(3.0 / sellPrice)
+			if neededAmount <= sellAmount {
+				intSellAmount = neededAmount
+				log.Printf("📊 [%s] 调整卖出数量: %.0f → %.0f (确保达到最小价值要求3 USDT)", 
+					task.AccountID, sellAmount, intSellAmount)
+			} else {
+				log.Printf("⚠️ [%s] 即使卖出全部余额(%.6f)也无法达到最小价值要求3 USDT", 
+					task.AccountID, sellAmount)
+				// 继续尝试，让币安决定是否接受订单
+			}
+		}
+	}
+	
+	// 严格确保数量是整数，并且字符串表示与数值完全一致
+	intSellAmount = math.Floor(intSellAmount) // 确保是整数
+	
+	// 统一使用整数格式的字符串，避免精度问题
+	strAmount := fmt.Sprintf("%.0f", intSellAmount) // 使用整数格式的字符串，不带小数点
+	
+	// 记录详细的订单信息，便于调试
+	log.Printf("📝 [%s] 订单详情 - 代币: %s, 价格: %.8f, 数量: %s, 总价值: %.2f USDT", 
+		task.AccountID, task.BaseAsset, sellPrice, strAmount, sellPrice * intSellAmount)
+	
+	// 将字符串转回为整数，确保完全一致
+	exactAmount, _ := strconv.ParseInt(strAmount, 10, 64)
+	
+	// 使用整数作为数量，避免浮点数精度问题
+	log.Printf("🔢 [%s] 统一使用整数数量: %d", task.AccountID, exactAmount)
+	
+	// 构造请求体JSON字符串，确保数量字段完全一致
+	orderJSON := fmt.Sprintf(`{
+		"baseAsset": "%s",
+		"quoteAsset": "USDT",
+		"side": "SELL",
+		"price": %.8f,
+		"quantity": %s,
+		"paymentDetails": [
+			{
+				"amount": %s,
+				"paymentWalletType": "ALPHA"
+			}
+		]
+	}`, task.BaseAsset, sellPrice, strAmount, strAmount)
+	
+	// 打印完整的JSON请求体，用于调试
+	log.Printf("📦 [%s] 强制卖出JSON请求体: %s", task.AccountID, orderJSON)
+	
+	// 解析为OrderRequest结构体
+	var orderReq OrderRequest
+	if err := json.Unmarshal([]byte(orderJSON), &orderReq); err != nil {
+		log.Printf("❌ [%s] 解析订单JSON失败: %v", task.AccountID, err)
+		// 使用备用方法构造请求
+		orderReq = OrderRequest{
 			BaseAsset:  task.BaseAsset,
 			QuoteAsset: "USDT",
 			Side:       "SELL",
 			Price:      sellPrice,
-			Quantity:   sellAmount,
+			Quantity:   float64(exactAmount),
 			PaymentDetails: []PaymentDetail{{
-				Amount:            sellAmount,
-				AmountStr:         fmt.Sprintf("%.6f", sellAmount), // 🔧 修复：保留6位小数，支持小额代币
+				Amount:            float64(exactAmount),
+				AmountStr:         strAmount,
 				PaymentWalletType: "ALPHA",
 			}},
-			Csrftoken: task.Csrftoken,
-			Cookie:    task.Cookie,
-		}, task.AccountID, 2) // 只重试2次，快速失败
+		}
+	}
+	
+	// 添加认证信息
+	orderReq.Csrftoken = task.Csrftoken
+	orderReq.Cookie = task.Cookie
+	
+	// 打印最终请求对象，确认字段一致性
+	log.Printf("📝 [%s] 最终订单对象 - Quantity: %v, PaymentDetails.Amount: %v, PaymentDetails.AmountStr: %s", 
+		task.AccountID, orderReq.Quantity, 
+		orderReq.PaymentDetails[0].Amount, 
+		orderReq.PaymentDetails[0].AmountStr)
+		
+		// 🚨 同步模式：直接尝试下单，简化流程
+		log.Printf("🔄 [%s] 强制卖出同步下单: %.8f USDT", task.AccountID, sellPrice)
+		
+		// 直接使用placeOrderWithID下单
+		orderID, success := placeOrderWithID(orderReq)
+		
+		// 如果下单失败，尝试重试几次
+		if !success {
+			// 检查是否是"incorrect price or amount"错误
+			if strings.Contains(orderID, "incorrect price or amount") {
+				log.Printf("⚠️ [%s] 币安拒绝下单(价格或数量不正确)，尝试使用forceCleanToken方法", task.AccountID)
+				
+				// 使用forceCleanToken方法，该方法更适合处理小额代币
+				go func() {
+					if err := forceCleanToken(task.TokenAddress, task.BaseAsset, task.Csrftoken, task.Cookie, 8); err != nil {
+						log.Printf("⚠️ [%s] forceCleanToken失败: %v", task.AccountID, err)
+					} else {
+						log.Printf("✅ [%s] forceCleanToken成功清理代币", task.AccountID)
+						// 设置代币已卖出状态
+						setTokenSold(task.AccountID, task.TokenAddress, "clean", sellPrice, sellAmount)
+					}
+				}()
+				
+				// 更新最后交易时间，确保系统可以继续其他操作
+				updateLastTradeTime(task.AccountID)
+				return true // 返回true表示处理完成
+			}
+			
+			// 检查是否是"余额不足"错误
+			if strings.Contains(orderID, "余额不足") || strings.Contains(orderID, "INSUFFICIENT_BALANCE") {
+				// 再次检查代币余额
+				tokenBalance, balErr := getTokenBalance(task.TokenAddress, task.Csrftoken, task.Cookie)
+				if balErr == nil {
+					freeAmount, _ := strconv.ParseFloat(tokenBalance.Free, 64)
+					lockedAmount, _ := strconv.ParseFloat(tokenBalance.Locked, 64)
+					
+					log.Printf("📊 [%s] 余额不足错误，当前余额: 可用=%.6f, 锁定=%.6f", 
+						task.AccountID, freeAmount, lockedAmount)
+					
+					if freeAmount <= 0 && lockedAmount > 0 {
+						log.Printf("✅ [%s] 代币已全部锁定，可能已在挂单中，等待成交", task.AccountID)
+						// 设置代币已卖出状态
+						setTokenSold(task.AccountID, task.TokenAddress, "pending", sellPrice, sellAmount)
+						updateLastTradeTime(task.AccountID)
+						return true // 返回true表示处理完成
+					}
+					
+					if freeAmount <= 0 && lockedAmount <= 0 {
+						log.Printf("✅ [%s] 代币余额为0，可能已被卖出", task.AccountID)
+						// 设置代币已卖出状态
+						setTokenSold(task.AccountID, task.TokenAddress, "unknown", sellPrice, sellAmount)
+						updateLastTradeTime(task.AccountID)
+						return true // 返回true表示处理完成
+					}
+				}
+			}
+			
+			// 其他错误，尝试常规重试
+			for retry := 1; retry <= 3; retry++ {
+				log.Printf("⚠️ [%s] 强制卖出下单失败，进行第%d次重试", task.AccountID, retry)
+				
+				// 每次重试前等待一小段时间
+				time.Sleep(time.Duration(500*retry) * time.Millisecond)
+				
+				// 重新尝试下单
+				orderID, success = placeOrderWithID(orderReq)
+				
+				// 如果成功则跳出循环
+				if success {
+					log.Printf("✅ [%s] 强制卖出重试成功，订单ID: %s", task.AccountID, orderID)
+					break
+				}
+				
+				// 如果遇到特殊错误，中断重试
+				if strings.Contains(orderID, "incorrect price or amount") || 
+				   strings.Contains(orderID, "余额不足") || 
+				   strings.Contains(orderID, "INSUFFICIENT_BALANCE") {
+					log.Printf("⚠️ [%s] 检测到特殊错误，中断重试: %s", task.AccountID, orderID)
+					break
+				}
+			}
+		}
 
 		if success {
 			log.Printf("✅ [%s] 强制卖出下单成功: %s, 订单ID: %s", task.AccountID, task.TokenAddress, orderID)
@@ -5801,6 +7276,9 @@ func executeForceDecrementSell(task *AutoSellTask, sellAmount float64, marketPri
 			sellTime := time.Now().UnixMilli()
 			if checkSellOrderHistory(sellTime, task.Csrftoken, task.Cookie) {
 				log.Printf("✅ [%s] 强制卖出成交成功", task.AccountID)
+
+				// 设置代币已卖出状态，供其他流程检查
+				setTokenSold(task.AccountID, task.TokenAddress, "force", sellPrice, sellAmount)
 
 				// 强制卖出完成，只更新最后交易时间，不计算交易额和交易次数
 				updateLastTradeTime(task.AccountID)
@@ -5817,22 +7295,15 @@ func executeForceDecrementSell(task *AutoSellTask, sellAmount float64, marketPri
 		time.Sleep(100 * time.Millisecond)
 	}
 
-	// 兜底机制：所有价格都失败后，启动异步快速递减策略
-	log.Printf("🔄 [%s] 强制卖出所有价格都失败，启动异步递减兜底: %s", task.AccountID, task.TokenAddress)
-
-	// 创建TradeRequest来使用现有的asyncFastDecrement函数
-	req := &TradeRequest{
-		AccountID:      task.AccountID,
-		TokenAddress:   task.TokenAddress,
-		BaseAsset:      task.BaseAsset,
-		Csrftoken:      task.Csrftoken,
-		Cookie:         task.Cookie,
-		PricePrecision: 8, // 默认精度
-	}
-
-	// 使用现有的异步快速递减策略作为兜底
-	buyPrice := startPrice * 1.01 // 假设买入价格比起始价格高1%
-	go asyncFastDecrement(req, buyPrice, sellAmount, startPrice)
+	// 所有价格都尝试失败，记录日志
+	log.Printf("🔄 [%s] 强制卖出所有价格都失败: %s，将由其他兜底机制处理", task.AccountID, task.TokenAddress)
+	
+	// 更新最后交易时间，确保系统可以继续其他操作
+	updateLastTradeTime(task.AccountID)
+	
+	// 同步模式结束，确保清理所有状态
+	resetAccountAsyncState(task.AccountID)
+	log.Printf("🔓 [%s] 强制卖出同步模式结束，已清理所有状态", task.AccountID)
 
 	return false // 所有价格都尝试过了，仍未成功
 }
@@ -6396,6 +7867,30 @@ func min(a, b int) int {
 	return b
 }
 
+// getBuyPriceForToken 获取指定账户和代币的买入价格
+func getBuyPriceForToken(accountID, tokenAddress string) float64 {
+	// 尝试从累积任务统计中获取
+	stats := getCumulativeStats(accountID)
+	if stats != nil && len(stats.History) > 0 {
+		// 查找最近的历史记录
+		for _, record := range stats.History {
+			// 这里需要从任务ID中提取代币地址进行比较
+			// 通常任务ID格式为: accountID_tokenAddress_timestamp
+			parts := strings.Split(record.TaskID, "_")
+			if len(parts) >= 2 && strings.Contains(parts[1], tokenAddress) {
+				// 如果找到匹配的记录，估算买入价格
+				if record.CompletedVolume > 0 && record.ProfitLoss < 0 {
+					// 根据完成交易额和亏损估算买入价格
+					return record.CompletedVolume / (record.CompletedVolume + record.ProfitLoss)
+				}
+			}
+		}
+	}
+	
+	// 如果没找到，返回0表示无法确定买入价格
+	return 0
+}
+
 // markTokenProcessing 标记代币开始处理（避免冲突）
 func markTokenProcessing(accountID, tokenAddress string) bool {
 	processingMutex.Lock()
@@ -6439,8 +7934,8 @@ type GlobalOrderCleaner struct {
 
 var (
 	globalCleaner = &GlobalOrderCleaner{
-		cleanupInterval: 15 * time.Second, // 每15秒检查一次
-		maxOrderAge:     50 * time.Second, // 超过50秒的订单被清理
+		cleanupInterval: 1 * time.Minute, // 每1分钟检查一次
+		maxOrderAge:     1 * time.Minute, // 超过1分钟的订单被清理
 		stopChan:        make(chan struct{}),
 	}
 )
@@ -6751,6 +8246,8 @@ func cancelOrderByID(orderID, symbol, csrftoken, cookie string) bool {
 	// 检查取消是否成功
 	if code, exists := cancelResp["code"]; exists {
 		if code == "000000" || code == 0 {
+			// 订单取消成功，无需额外延迟
+			log.Printf("✅ [%s] 订单取消成功", orderID)
 			return true
 		}
 
@@ -6814,15 +8311,6 @@ func startEmergencySellMonitoring(accountID, tokenAddress, baseAsset, csrftoken,
 // immediateForceSellingProcess 立即强制卖出处理（发现代币余额时立即执行）
 func immediateForceSellingProcess(accountID, tokenAddress, baseAsset, csrftoken, cookie string, freeAmount float64) {
 	log.Printf("🚨 [%s] 开始立即强制卖出处理: %s, 数量: %.6f", accountID, tokenAddress, freeAmount)
-
-	//// 标记开始处理，避免冲突
-	//if !markTokenProcessing(accountID, tokenAddress) {
-	//	log.Printf("🔍 [%s] 跳过立即强制卖出，代币已被其他流程标记: %s",
-	//		accountID, tokenAddress)
-	//	return
-	//}
-
-	//defer unmarkTokenProcessing(accountID, tokenAddress)
 
 	// 1. 先取消所有可能的挂单
 	log.Printf("🗑️ [%s] 先取消所有挂单", accountID)
@@ -7235,9 +8723,9 @@ func forceCleanToken(tokenAddress, baseAsset, csrftoken, cookie string, pricePre
 		case attempts == 0:
 			threshold = 1.0
 		case attempts == 1:
-			threshold = 0.5
+			threshold = 1.0 // 修改：提高阈值，避免币安拒绝下单
 		case attempts == 2:
-			threshold = 0.2
+			threshold = 0.5 // 第三次尝试时可以降低阈值
 		default:
 			// 超过3次尝试，强制完成
 			log.Printf("⚠️ 强制清空已尝试%d次，防止死循环，强制完成", attempts)
@@ -8122,6 +9610,17 @@ func isAccountBusy(accountID string) bool {
 	return state.HasHangingOrder || state.HasAsyncDecrement || state.HasCleanup
 }
 
+// resetAccountAsyncState 重置账户的所有异步状态
+func resetAccountAsyncState(accountID string) {
+	asyncStateMutex.Lock()
+	defer asyncStateMutex.Unlock()
+	
+	if accountAsyncStates[accountID] != nil {
+		log.Printf("🧹 [%s] 重置所有异步状态", accountID)
+		delete(accountAsyncStates, accountID)
+	}
+}
+
 // cleanupExpiredAsyncStates 清理过期的异步状态
 func cleanupExpiredAsyncStates() {
 	asyncStateMutex.Lock()
@@ -8133,6 +9632,67 @@ func cleanupExpiredAsyncStates() {
 		if now.Sub(state.LastUpdateTime) > 10*time.Minute {
 			delete(accountAsyncStates, accountID)
 			log.Printf("🧹 清理过期异步状态: %s", accountID)
+		}
+	}
+}
+
+// 获取代币卖出状态的键
+func getTokenSellStatusKey(accountID, tokenAddress string) string {
+	return accountID + "_" + tokenAddress
+}
+
+// 设置代币已卖出状态
+func setTokenSold(accountID, tokenAddress string, soldBy string, soldPrice, soldAmount float64) {
+	sellStatusMutex.Lock()
+	defer sellStatusMutex.Unlock()
+	
+	key := getTokenSellStatusKey(accountID, tokenAddress)
+	tokenSellStatuses[key] = &TokenSellStatus{
+		IsSold:         true,
+		SoldTime:       time.Now(),
+		SoldBy:         soldBy,
+		SoldPrice:      soldPrice,
+		SoldAmount:     soldAmount,
+		LastUpdateTime: time.Now(),
+	}
+	
+	log.Printf("🔔 [%s] 设置代币 %s 已卖出状态 - 方式: %s, 价格: %.8f, 数量: %.6f", 
+		accountID, tokenAddress, soldBy, soldPrice, soldAmount)
+}
+
+// 检查代币是否已卖出
+func isTokenSold(accountID, tokenAddress string) bool {
+	sellStatusMutex.RLock()
+	defer sellStatusMutex.RUnlock()
+	
+	key := getTokenSellStatusKey(accountID, tokenAddress)
+	status, exists := tokenSellStatuses[key]
+	return exists && status.IsSold
+}
+
+// 获取代币卖出状态
+func getTokenSellStatus(accountID, tokenAddress string) *TokenSellStatus {
+	sellStatusMutex.RLock()
+	defer sellStatusMutex.RUnlock()
+	
+	key := getTokenSellStatusKey(accountID, tokenAddress)
+	if status, exists := tokenSellStatuses[key]; exists {
+		return status
+	}
+	return nil
+}
+
+// 清理过期的代币卖出状态
+func cleanupExpiredTokenSellStatuses() {
+	sellStatusMutex.Lock()
+	defer sellStatusMutex.Unlock()
+	
+	now := time.Now()
+	for key, status := range tokenSellStatuses {
+		// 如果状态超过30分钟没更新，认为已过期
+		if now.Sub(status.LastUpdateTime) > 30*time.Minute {
+			delete(tokenSellStatuses, key)
+			log.Printf("🧹 清理过期代币卖出状态: %s", key)
 		}
 	}
 }
@@ -8297,6 +9857,25 @@ func hangOrderAtQian8Loss(req *TradeRequest, buyPrice, sellTokenAmount float64, 
 
 	log.Printf("💰 [%s] 千8挂单价格: %.12f (买入价: %.12f, 市场价: %.12f)",
 		req.AccountID, qian8Price, buyPrice, currentMarketPrice)
+		
+	// 🚨 修改：提高最低价值阈值，避免币安拒绝下单
+	tokenValue := qian8Price * sellTokenAmount
+	if tokenValue < 1.0 { // 如果代币总价值低于1.0 USDT，则中断卖出
+		log.Printf("💸 [%s] 代币价值过低(%.8f USDT < 1.0 USDT)，币安会拒绝下单，跳过千8挂单操作", 
+			req.AccountID, tokenValue)
+		log.Printf("📊 [%s] 代币详情: 数量=%.6f, 价格=%.8f", req.AccountID, sellTokenAmount, qian8Price)
+		// 更新最后交易时间，确保系统可以继续其他操作
+		updateLastTradeTime(req.AccountID)
+		return TradeResponse{
+			Success:     true, // 标记为成功，避免系统继续尝试卖出
+			Message:     "代币价值过低(< 1.0 USDT)，币安会拒绝下单，跳过千8挂单操作",
+			BuyPrice:    buyPrice,
+			SellPrice:   qian8Price,
+			TokenAmount: sellTokenAmount,
+			Profit:      0,
+			ExecuteTime: time.Since(startTime).Milliseconds(),
+		}
+	}
 
 	// 调整代币数量以符合币安规定
 	adjustedTokenAmount := adjustTokenAmountForBinance(qian8Price, sellTokenAmount, req.PricePrecision)
@@ -8450,12 +10029,54 @@ func hangOrderAtQian8Loss(req *TradeRequest, buyPrice, sellTokenAmount float64, 
 func executeDecrementRetry(req *TradeRequest, buyPrice, sellTokenAmount, currentMarketPrice float64, startTime time.Time) TradeResponse {
 	log.Printf("🔄 [%s] 开始递减重试策略", req.AccountID)
 
+	// 首先检查代币是否已被其他流程卖出
+	if isTokenSold(req.AccountID, req.TokenAddress) {
+		status := getTokenSellStatus(req.AccountID, req.TokenAddress)
+		log.Printf("✅ [%s] 代币已被其他流程卖出，停止递减重试 - 方式: %s, 价格: %.8f, 数量: %.6f", 
+			req.AccountID, status.SoldBy, status.SoldPrice, status.SoldAmount)
+		
+		// 返回成功响应，避免继续尝试卖出
+		return TradeResponse{
+			Success:     true,
+			Message:     fmt.Sprintf("代币已被%s方式卖出，无需递减重试", status.SoldBy),
+			BuyPrice:    buyPrice,
+			SellPrice:   status.SoldPrice,
+			TokenAmount: status.SoldAmount,
+			Profit:      (status.SoldPrice - buyPrice) * status.SoldAmount,
+			ExecuteTime: time.Since(startTime).Milliseconds(),
+		}
+	}
+	
 	// 检查代币数量是否为0
 	if sellTokenAmount <= 0 {
 		log.Printf("⚠️ [%s] 递减重试代币数量为0，跳过卖单 - 数量: %.0f", req.AccountID, sellTokenAmount)
 		return TradeResponse{
 			Success: false,
 			Message: "递减重试代币数量为0，无法下单",
+		}
+	}
+	
+	// 再次检查代币余额，确认是否还有可卖代币
+	tokenBalance, balErr := getTokenBalance(req.TokenAddress, req.Csrftoken, req.Cookie)
+	if balErr == nil {
+		freeAmount, _ := strconv.ParseFloat(tokenBalance.Free, 64)
+		if freeAmount <= 0 {
+			log.Printf("✅ [%s] 代币余额为0，可能已被卖出，停止递减重试", req.AccountID)
+			// 设置代币已卖出状态，但卖出方式未知
+			setTokenSold(req.AccountID, req.TokenAddress, "unknown", currentMarketPrice, sellTokenAmount)
+			return TradeResponse{
+				Success:     true,
+				Message:     "代币余额为0，无需递减重试",
+				BuyPrice:    buyPrice,
+				SellPrice:   currentMarketPrice,
+				TokenAmount: sellTokenAmount,
+				Profit:      (currentMarketPrice - buyPrice) * sellTokenAmount,
+				ExecuteTime: time.Since(startTime).Milliseconds(),
+			}
+		} else if freeAmount < sellTokenAmount {
+			log.Printf("📊 [%s] 递减重试更新卖出数量: %.6f → %.6f (使用当前可用余额)", 
+				req.AccountID, sellTokenAmount, freeAmount)
+			sellTokenAmount = freeAmount
 		}
 	}
 
@@ -9068,6 +10689,240 @@ func resetGlobalStateForNextTrade() {
 
 	// 🚨 新增：等待一小段时间，确保所有异步任务都能看到重置状态
 	time.Sleep(100 * time.Millisecond)
+}
+
+// 🚀 处理速度模式设置
+func handleSpeedMode(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if r.Method == "GET" {
+		// 查询当前速度模式
+		currentMode := getCurrentSpeedMode()
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success":     true,
+			"speed_mode":  currentMode.Name,
+			"description": currentMode.Description,
+			"config": map[string]interface{}{
+				"trade_interval_seconds":   int(currentMode.TradeInterval.Seconds()),
+				"max_orders_per_second":    currentMode.MaxOrdersPerSecond,
+				"max_api_calls_per_second": currentMode.MaxAPICallsPerSecond,
+				"api_call_interval_ms":     int(currentMode.APICallInterval.Nanoseconds() / 1000000),
+				"volume_api_interval_ms":   int(currentMode.VolumeAPIInterval.Nanoseconds() / 1000000),
+				"global_api_limit":         currentMode.GlobalAPILimit,
+			},
+			"成功":   true,
+			"速度模式": currentMode.Name,
+			"描述":   currentMode.Description,
+		})
+		return
+	}
+
+	if r.Method == "POST" {
+		var req struct {
+			SpeedMode string `json:"speed_mode"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"message": "Invalid request format",
+				"成功":      false,
+				"消息":      "请求格式无效",
+			})
+			return
+		}
+
+		// 验证速度模式
+		if req.SpeedMode == "" {
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"message": "Speed mode is required",
+				"成功":      false,
+				"消息":      "速度模式不能为空",
+			})
+			return
+		}
+
+		// 应用速度模式
+		applySpeedMode(req.SpeedMode)
+		currentMode := getCurrentSpeedMode()
+
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success":     true,
+			"message":     fmt.Sprintf("Speed mode applied: %s", currentMode.Name),
+			"speed_mode":  currentMode.Name,
+			"description": currentMode.Description,
+			"成功":          true,
+			"消息":          fmt.Sprintf("速度模式已应用: %s", currentMode.Name),
+			"速度模式":        currentMode.Name,
+			"描述":          currentMode.Description,
+		})
+		return
+	}
+}
+
+// 🚀 处理速度模式列表查询
+func handleSpeedModes(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if r.Method != "GET" {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	// 构建速度模式列表
+	modes := make([]map[string]interface{}, 0)
+	for key, mode := range speedModes {
+		modes = append(modes, map[string]interface{}{
+			"key":         key,
+			"name":        mode.Name,
+			"description": mode.Description,
+			"config": map[string]interface{}{
+				"trade_interval_seconds":   int(mode.TradeInterval.Seconds()),
+				"max_orders_per_second":    mode.MaxOrdersPerSecond,
+				"max_api_calls_per_second": mode.MaxAPICallsPerSecond,
+				"api_call_interval_ms":     int(mode.APICallInterval.Nanoseconds() / 1000000),
+				"volume_api_interval_ms":   int(mode.VolumeAPIInterval.Nanoseconds() / 1000000),
+				"global_api_limit":         mode.GlobalAPILimit,
+			},
+		})
+	}
+
+	// 获取当前模式
+	currentMode := getCurrentSpeedMode()
+	currentKey := ""
+	for key, mode := range speedModes {
+		if mode.Name == currentMode.Name {
+			currentKey = key
+			break
+		}
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":      true,
+		"modes":        modes,
+		"current_mode": currentKey,
+		"成功":           true,
+		"模式列表":         modes,
+		"当前模式":         currentKey,
+	})
 
 	log.Printf("✅ 全局状态重置完成，服务已准备好接收新的交易请求")
+}
+
+// handleCompleteCleanup 处理完整清理请求（暂停+清理挂单+清理代币残留）
+func handleCompleteCleanup(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if r.Method != "POST" {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "只支持POST方法",
+		})
+		return
+	}
+
+	// 解析请求
+	var req struct {
+		AccountID      string `json:"account_id"`
+		Csrftoken      string `json:"csrftoken"`
+		Cookie         string `json:"cookie"`
+		TokenAddress   string `json:"token_address"`   // 可选，指定要清理的代币地址
+		BaseAsset      string `json:"base_asset"`      // 可选，指定要清理的基础资产
+		PauseDuration  int    `json:"pause_duration"`  // 暂停时长（秒），默认300秒
+		PricePrecision int    `json:"price_precision"` // 价格精度，默认8位
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "请求格式无效",
+		})
+		return
+	}
+
+	if req.AccountID == "" || req.Csrftoken == "" || req.Cookie == "" {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "缺少必要参数: account_id, csrftoken, cookie",
+		})
+		return
+	}
+
+	// 设置默认值
+	if req.PauseDuration <= 0 {
+		req.PauseDuration = 300 // 默认暂停5分钟
+	}
+	if req.PricePrecision <= 0 {
+		req.PricePrecision = 8 // 默认8位精度
+	}
+
+	// 1. 设置账户暂停状态
+	duration := time.Duration(req.PauseDuration) * time.Second
+	setAccountPauseStatus(req.AccountID, duration, "complete_cleanup")
+	log.Printf("⏸️ [%s] 完整清理：设置暂停状态 %d 秒", req.AccountID, req.PauseDuration)
+
+	// 2. 强制清理所有挂单
+	cleanedCount := forceCleanupAllOrders(req.AccountID, req.Csrftoken, req.Cookie)
+	log.Printf("🧹 [%s] 完整清理：清理了 %d 个挂单", req.AccountID, cleanedCount)
+
+	// 3. 清理指定代币残留（如果提供了代币地址）
+	tokenCleanResult := "未指定代币，跳过清理"
+	if req.TokenAddress != "" {
+		// 如果提供了代币地址但没有提供baseAsset，尝试推断
+		if req.BaseAsset == "" {
+			req.BaseAsset = inferBaseAssetFromTokenAddress(req.TokenAddress)
+			log.Printf("🔍 [%s] 完整清理：推断基础资产为 %s", req.AccountID, req.BaseAsset)
+		}
+
+		// 执行代币清理
+		err := forceCleanToken(req.TokenAddress, req.BaseAsset, req.Csrftoken, req.Cookie, req.PricePrecision)
+		if err != nil {
+			tokenCleanResult = fmt.Sprintf("清理失败: %v", err)
+			log.Printf("❌ [%s] 完整清理：代币清理失败 %s: %v", req.AccountID, req.TokenAddress, err)
+		} else {
+			tokenCleanResult = "清理成功"
+			log.Printf("✅ [%s] 完整清理：代币清理成功 %s", req.AccountID, req.TokenAddress)
+		}
+	}
+
+	// 4. 返回结果
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "完整清理操作已执行",
+		"results": map[string]interface{}{
+			"account_id":       req.AccountID,
+			"pause_status":     "已暂停",
+			"pause_duration":   req.PauseDuration,
+			"pause_end":        time.Now().Add(duration).Unix(),
+			"orders_cleaned":   cleanedCount,
+			"token_clean":      tokenCleanResult,
+			"token_address":    req.TokenAddress,
+			"base_asset":       req.BaseAsset,
+			"price_precision":  req.PricePrecision,
+		},
+	})
 }
