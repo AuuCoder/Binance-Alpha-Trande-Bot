@@ -355,9 +355,52 @@ var (
 var tradeResults = make(map[string][]TradeResponse) // 存储交易结果
 var resultsMutex sync.RWMutex
 
-// 🔧 新增：防止重复统计的交易ID跟踪
-var processedTradeIDs = make(map[string]bool) // 已处理的交易ID
+// 🔧 修改：添加过期时间到已处理交易ID的记录
+var processedTradeIDs = make(map[string]time.Time) // 交易ID -> 处理时间
 var tradeIDMutex sync.RWMutex
+var maxTradeIDLifetime = 24 * time.Hour // 交易ID最长保存24小时
+
+// 🔧 修改：检查交易是否已被统计，并清理过期记录
+func isTradeProcessed(tradeID string) bool {
+	tradeIDMutex.RLock()
+	processTime, exists := processedTradeIDs[tradeID]
+	tradeIDMutex.RUnlock()
+	
+	// 如果存在且未过期，则认为已处理
+	if exists && time.Since(processTime) < maxTradeIDLifetime {
+		return true
+	}
+	
+	// 定期清理过期的交易ID记录（每100次检查执行一次）
+	if rand.Intn(100) == 0 {
+		go cleanupExpiredTradeIDs()
+	}
+	
+	return false
+}
+
+// 🔧 修改：标记交易已被统计，记录当前时间
+func markTradeProcessed(tradeID string) {
+	tradeIDMutex.Lock()
+	defer tradeIDMutex.Unlock()
+	processedTradeIDs[tradeID] = time.Now()
+}
+
+// 🔧 新增：清理过期的交易ID记录
+func cleanupExpiredTradeIDs() {
+	tradeIDMutex.Lock()
+	defer tradeIDMutex.Unlock()
+	
+	now := time.Now()
+	for id, processTime := range processedTradeIDs {
+		if now.Sub(processTime) > maxTradeIDLifetime {
+			delete(processedTradeIDs, id)
+		}
+	}
+	
+	// 记录清理情况
+	log.Printf("🧹 已清理过期交易ID记录，当前记录数: %d", len(processedTradeIDs))
+}
 
 // 🔧 新增：累积任务统计
 var cumulativeTaskStats = make(map[string]*CumulativeTaskStats) // accountID -> CumulativeTaskStats
@@ -377,23 +420,19 @@ var globalStats = &GlobalStats{}
 var globalMutex sync.RWMutex
 
 // 🔧 新增：生成唯一交易ID
-func generateTradeID(accountID, tokenAddress string, buyPrice, tokenAmount float64) string {
+func generateTradeID(accountID, tokenAddress string, buyPrice, tokenAmount float64, orderID ...string) string {
 	timestamp := time.Now().UnixNano()
-	return fmt.Sprintf("%s_%s_%.6f_%.6f_%d", accountID, tokenAddress, buyPrice, tokenAmount, timestamp)
-}
-
-// 🔧 新增：检查交易是否已被统计
-func isTradeProcessed(tradeID string) bool {
-	tradeIDMutex.RLock()
-	defer tradeIDMutex.RUnlock()
-	return processedTradeIDs[tradeID]
-}
-
-// 🔧 新增：标记交易已被统计
-func markTradeProcessed(tradeID string) {
-	tradeIDMutex.Lock()
-	defer tradeIDMutex.Unlock()
-	processedTradeIDs[tradeID] = true
+	// 添加随机数增加唯一性
+	randomPart := rand.Intn(100000)
+	
+	// 如果提供了订单ID，将其包含在交易ID中
+	if len(orderID) > 0 && orderID[0] != "" {
+		return fmt.Sprintf("%s_%s_%.6f_%.6f_%d_%d_%s", 
+			accountID, tokenAddress, buyPrice, tokenAmount, timestamp, randomPart, orderID[0])
+	}
+	
+	return fmt.Sprintf("%s_%s_%.6f_%.6f_%d_%d", 
+		accountID, tokenAddress, buyPrice, tokenAmount, timestamp, randomPart)
 }
 
 // 🔧 新增：智能止损配置
@@ -2822,15 +2861,16 @@ priceObtained:
 			buyConfirmed = true
 			log.Printf("✅ [%s] 买入确认成功", req.AccountID)
 
-			// 🔧 新增：主买单成功后立即统计买入交易额（使用实际金额）
-			buyInCost := actualUSDTUsed // 🎲 使用实际花费的USDT金额，确保统计准确
-			if buyInCost > 0 && tokenAmount > 0 {
-				// 生成唯一交易ID防止重复统计
-				tradeID := generateTradeID(req.AccountID, req.TokenAddress, buyPrice, tokenAmount)
-				// 只统计买入交易额，损益为0（因为还没卖出）
-				updateAccountStatsWithID(req.AccountID, buyInCost, 0, tradeID)
-				log.Printf("📊 [%s] 主买单成功立即统计 - 买单金额: %.6f USDT (ID:%s)",
-					req.AccountID, buyInCost, tradeID[:8])
+				// 🔧 增强：主买单成功后立即统计买入交易额（使用实际金额）
+	buyInCost := actualUSDTUsed // 🎲 使用实际花费的USDT金额，确保统计准确
+	if buyInCost > 0 && tokenAmount > 0 {
+		// 生成唯一交易ID防止重复统计，使用订单ID增强唯一性
+		tradeID := generateTradeID(req.AccountID, req.TokenAddress, buyPrice, tokenAmount, buyOrderID)
+		log.Printf("📝 [%s] 生成主买单交易ID: %s (订单ID: %s)", req.AccountID, tradeID, buyOrderID)
+		// 只统计买入交易额，损益为0（因为还没卖出）
+		updateAccountStatsWithID(req.AccountID, buyInCost, 0, tradeID)
+		log.Printf("📊 [%s] 主买单成功立即统计 - 买单金额: %.6f USDT (ID:%s)",
+			req.AccountID, buyInCost, tradeID[:8])
 			}
 			break
 		}
@@ -2919,24 +2959,29 @@ func placeOrderWithID(order OrderRequest) (string, bool) {
 			}
 			
 			// 确保数量字段一致性
-			if len(order.PaymentDetails) > 0 {
-				// 使用AmountStr重新设置所有数量字段，确保一致性
-				amountStr := order.PaymentDetails[0].AmountStr
-				amount, _ := strconv.ParseFloat(amountStr, 64)
-				
-				// 更新所有数量字段
-				order.Quantity = amount
-				order.PaymentDetails[0].Amount = amount
-				
-				log.Printf("🔧 [%s] 统一后数量字段 - Quantity: %v, Amount: %v, AmountStr: %s", 
-					accountID, order.Quantity, order.PaymentDetails[0].Amount, amountStr)
-			}
+					if len(order.PaymentDetails) > 0 {
+			// 使用AmountStr重新设置所有数量字段，确保一致性
+			amountStr := order.PaymentDetails[0].AmountStr
+			amount, _ := strconv.ParseFloat(amountStr, 64)
+			
+			// 更新所有数量字段
+			order.Quantity = amount
+			order.PaymentDetails[0].Amount = amount
+			
+			log.Printf("🔧 [%s] 统一后数量字段 - Quantity: %v, Amount: %v, AmountStr: %s", 
+				accountID, order.Quantity, order.PaymentDetails[0].Amount, amountStr)
+		}
+		
+		// 确保价格精确到8位小数
+		priceStr := fmt.Sprintf("%.8f", order.Price)
+		order.Price, _ = strconv.ParseFloat(priceStr, 64)
+		
 		}
 		
 		jsonData, _ := json.Marshal(order)
 		
-		// 打印完整的JSON请求体，用于调试
-		log.Printf("📦 [%s] 请求JSON: %s", accountID, string(jsonData))
+		// 不打印完整的JSON请求体，避免敏感信息泄露
+		log.Printf("📦 [%s] 发送下单请求", accountID)
 
 		req, err := http.NewRequest("POST", "https://www.binance.com/bapi/asset/v1/private/alpha-trade/order/place", bytes.NewReader(jsonData))
 		if err != nil {
@@ -3001,7 +3046,7 @@ func placeOrderWithID(order OrderRequest) (string, bool) {
 
 				// 特殊错误处理
 				if code == "481020" {
-					log.Printf("❌ [%s] 余额不足，无法下单", accountID)
+					
 					// 余额不足直接返回特殊标识，避免无意义重试
 					return "INSUFFICIENT_BALANCE", false
 				}
@@ -3275,39 +3320,59 @@ func updateAccountStats(accountID string, volume float64, loss float64) {
 
 // updateAccountStatsWithID 带交易ID的统计更新（防重复）
 func updateAccountStatsWithID(accountID string, volume float64, loss float64, tradeID string) {
+	// 🔧 增强：添加更详细的日志和验证
+	if volume <= 0 {
+		log.Printf("⚠️ [%s] 交易额为0或负数，跳过统计: %.6f (ID:%s)", accountID, volume, tradeID)
+		return
+	}
+
 	// 🔧 防重复统计检查
 	if tradeID != "" {
 		if isTradeProcessed(tradeID) {
 			log.Printf("⚠️ [%s] 交易已统计，跳过重复统计: %s", accountID, tradeID)
 			return
 		}
+		log.Printf("📝 [%s] 标记交易ID已处理: %s", accountID, tradeID)
 		markTradeProcessed(tradeID)
+	} else {
+		log.Printf("⚠️ [%s] 未提供交易ID，存在重复统计风险", accountID)
 	}
 
 	statsMutex.Lock()
 	defer statsMutex.Unlock()
 
-	if stats, exists := accountStats[accountID]; exists {
-		stats.TotalVolume += volume // 累计买单金额
-		stats.TradeCount++          // 交易次数+1
-		stats.LastTradeTime = time.Now()
-		stats.TotalLoss += loss // 累计损益
-
-		// 计算总磨损率（万分比）
-		if stats.TotalVolume > 0 {
-			stats.TotalLossRate = (stats.TotalLoss / stats.TotalVolume) * 10000
-		}
-
-		if tradeID != "" {
-			log.Printf("📊 [%s] 统计更新(ID:%s): 买单金额=%.6f USDT, 累计=%.6f USDT, 交易次数=%d",
-				accountID, tradeID[:8], volume, stats.TotalVolume, stats.TradeCount)
-		} else {
-			log.Printf("📊 [%s] 统计更新: 买单金额=%.6f USDT, 累计=%.6f USDT, 交易次数=%d",
-				accountID, volume, stats.TotalVolume, stats.TradeCount)
+	// 确保账号统计对象存在
+	if _, exists := accountStats[accountID]; !exists {
+		log.Printf("🔧 [%s] 创建新的账号统计对象", accountID)
+		accountStats[accountID] = &AccountStats{
+			AccountID:     accountID,
+			LastTradeTime: time.Now(),
 		}
 	}
 
+	stats := accountStats[accountID]
+	oldVolume := stats.TotalVolume
+	stats.TotalVolume += volume // 累计买单金额
+	stats.TradeCount++          // 交易次数+1
+	stats.LastTradeTime = time.Now()
+	stats.TotalLoss += loss // 累计损益
+
+	// 计算总磨损率（万分比）
+	if stats.TotalVolume > 0 {
+		stats.TotalLossRate = (stats.TotalLoss / stats.TotalVolume) * 10000
+	}
+
+	// 🔧 增强：详细记录统计变化
+	if tradeID != "" {
+		log.Printf("📊 [%s] 统计更新(ID:%s): 买单金额=%.6f USDT, 之前累计=%.6f USDT, 现在累计=%.6f USDT, 交易次数=%d",
+			accountID, tradeID[:8], volume, oldVolume, stats.TotalVolume, stats.TradeCount)
+	} else {
+		log.Printf("📊 [%s] 统计更新: 买单金额=%.6f USDT, 之前累计=%.6f USDT, 现在累计=%.6f USDT, 交易次数=%d",
+			accountID, volume, oldVolume, stats.TotalVolume, stats.TradeCount)
+	}
+
 	// 在锁外更新全局统计，避免死锁
+	// 每次更新都立即触发全局统计更新，确保前端数据实时性
 	go updateGlobalStats()
 }
 
@@ -5031,9 +5096,11 @@ func retryBuyWithNewPriceAttempt(req *TradeRequest, startTime time.Time, retryAt
 	// 🔧 修复：重试买单成功后需要统计交易额（使用防重复机制）
 	buyInCost := retryActualUSDTUsed // 🎲 使用重试时实际花费的USDT金额
 
-	// 🔧 新增：重试买单成功后立即统计买入交易额（防重复）
+	// 🔧 增强：重试买单成功后立即统计买入交易额（防重复）
 	if buyInCost > 0 && tokenAmount > 0 {
-		tradeID := generateTradeID(req.AccountID, req.TokenAddress, newPrice, tokenAmount)
+		// 生成唯一交易ID防止重复统计，使用订单ID增强唯一性
+		tradeID := generateTradeID(req.AccountID, req.TokenAddress, newPrice, tokenAmount, buyOrderID)
+		log.Printf("📝 [%s] 生成重试买单交易ID: %s (订单ID: %s)", req.AccountID, tradeID, buyOrderID)
 		updateAccountStatsWithID(req.AccountID, buyInCost, 0, tradeID)
 		log.Printf("📊 [%s] 重试买单成功立即统计 - 买单金额: %.6f USDT (ID:%s)",
 			req.AccountID, buyInCost, tradeID[:8])
@@ -5297,7 +5364,7 @@ func sellAtMarketPrice(req *TradeRequest, buyPrice, sellTokenAmount, marketPrice
 		"quantity": %s,
 		"paymentDetails": [
 			{
-				"amount": %s,
+				"amount": "%s",
 				"paymentWalletType": "ALPHA"
 			}
 		]
@@ -7147,14 +7214,14 @@ func executeForceDecrementSell(task *AutoSellTask, sellAmount float64, marketPri
 		"quantity": %s,
 		"paymentDetails": [
 			{
-				"amount": %s,
+				"amount": "%s",
 				"paymentWalletType": "ALPHA"
 			}
 		]
 	}`, task.BaseAsset, sellPrice, strAmount, strAmount)
 	
-	// 打印完整的JSON请求体，用于调试
-	log.Printf("📦 [%s] 强制卖出JSON请求体: %s", task.AccountID, orderJSON)
+	// 不打印完整的JSON请求体，避免敏感信息泄露
+	log.Printf("📦 [%s] 发送强制卖出请求", task.AccountID)
 	
 	// 解析为OrderRequest结构体
 	var orderReq OrderRequest

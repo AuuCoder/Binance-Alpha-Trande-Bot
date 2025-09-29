@@ -1,6 +1,6 @@
 {
   "server": {
-    "port": 18080,
+    "port": 28080,
     "host": "0.0.0.0",
     "mode": "master",
     "node_id": "master-server",
@@ -12,7 +12,7 @@
     "db": 0
   },
   "grpc": {
-    "port": 19090,
+    "port": 29090,
     "max_recv_msg_size": 4194304,
     "max_send_msg_size": 4194304,
     "connection_timeout": 10,
@@ -26,6 +26,14 @@
     "max_retries": 3,
     "retry_delay": 1000,
     "price_cache_time": 5
+  },
+  "mongodb": {
+    "uri": "mongodb+srv://yuucoder:yuucoder0208..@bn-alpha.vamde.mongodb.net/?retryWrites=true&w=majority&appName=bn-alpha",
+    "database": "alpha",
+    "enabled": true,
+    "max_pool_size": 20,
+    "min_pool_size": 5,
+    "max_conn_idle_time": 300
   },
   "log": {
     "level": "info",

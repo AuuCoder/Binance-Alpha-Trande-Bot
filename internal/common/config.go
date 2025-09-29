@@ -12,6 +12,7 @@ import (
 type Config struct {
 	Server  ServerConfig  `json:"server"`
 	Redis   RedisConfig   `json:"redis"`
+	MongoDB *MongoDBConfig `json:"mongodb,omitempty"`
 	GRPC    GRPCConfig    `json:"grpc"`
 	Binance BinanceConfig `json:"binance"`
 	Log     LogConfig     `json:"log"`
@@ -63,11 +64,22 @@ type LogConfig struct {
 	MaxAge     int    `json:"max_age"`
 }
 
+// MongoDBConfig MongoDB配置
+type MongoDBConfig struct {
+	URI      string `json:"uri"`      // MongoDB连接URI
+	Database string `json:"database"` // 数据库名称
+	Enabled  bool   `json:"enabled"`  // 是否启用
+	// 连接池配置
+	MaxPoolSize     uint64 `json:"max_pool_size"`     // 最大连接池大小
+	MinPoolSize     uint64 `json:"min_pool_size"`     // 最小连接池大小
+	MaxConnIdleTime int    `json:"max_conn_idle_time"` // 最大连接空闲时间(秒)
+}
+
 // DefaultConfig 默认配置
 func DefaultConfig() *Config {
 	return &Config{
 		Server: ServerConfig{
-			Port:       8080,
+			Port:       28080,
 			Host:       "0.0.0.0",
 			Mode:       "master",
 			NodeID:     "",
@@ -78,8 +90,13 @@ func DefaultConfig() *Config {
 			Password: "",
 			DB:       0,
 		},
+		MongoDB: &MongoDBConfig{
+			URI:      "",
+			Database: "alpha",
+			Enabled:  false,
+		},
 		GRPC: GRPCConfig{
-			Port:              9090,
+			Port:              29090,
 			MaxRecvMsgSize:    4 * 1024 * 1024, // 4MB
 			MaxSendMsgSize:    4 * 1024 * 1024, // 4MB
 			ConnectionTimeout: 10,

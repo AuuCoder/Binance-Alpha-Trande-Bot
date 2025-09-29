@@ -29,7 +29,8 @@ type TradeRequest struct {
 	USDTAmount     float64 `json:"usdt_amount"`
 	TargetVolume   float64 `json:"target_volume"`
 	BaseAsset      string  `json:"base_asset"`
-	ChainID        string  `json:"chain_id"`
+	ChainID        string  `json:"chain_id"`        // 🔧 链ID支持
+	PriceMode      string  `json:"price_mode"`      // 🔧 新增：价格模式
 	PricePrecision int     `json:"price_precision"`
 	AutoLoop       bool    `json:"auto_loop"`
 	Csrftoken      string  `json:"csrftoken"`
@@ -105,6 +106,7 @@ func main() {
 	fmt.Printf("   目标交易量: %.2f\n", tradeParams.TargetVolume)
 	fmt.Printf("   基础资产: %s\n", tradeParams.BaseAsset)
 	fmt.Printf("   链ID: %s\n", tradeParams.ChainID)
+	fmt.Printf("   价格模式: %s\n", tradeParams.PriceMode)  // 🔧 新增
 	fmt.Printf("   价格精度: %d\n", tradeParams.PricePrecision)
 	fmt.Printf("   自动循环: %t\n", tradeParams.AutoLoop)
 	fmt.Println()
@@ -253,10 +255,29 @@ func loadConfig(filename string) ([]NodeConfig, error) {
 		return nil, fmt.Errorf("读取配置文件失败: %v", err)
 	}
 
-	// 解析JSON
+	// 尝试两种格式解析JSON
 	var nodes []NodeConfig
-	if err := json.Unmarshal(data, &nodes); err != nil {
-		return nil, fmt.Errorf("解析配置文件失败: %v", err)
+	
+	// 首先尝试直接解析为节点数组
+	err = json.Unmarshal(data, &nodes)
+	if err == nil && len(nodes) > 0 {
+		fmt.Println("✅ 使用数组格式配置文件")
+	} else {
+		// 如果失败，尝试解析为包含nodes字段的对象
+		var config struct {
+			Nodes []NodeConfig `json:"nodes"`
+		}
+		
+		if err := json.Unmarshal(data, &config); err != nil {
+			return nil, fmt.Errorf("解析配置文件失败: %v", err)
+		}
+		
+		nodes = config.Nodes
+		fmt.Println("✅ 使用对象格式配置文件")
+	}
+	
+	if len(nodes) == 0 {
+		return nil, fmt.Errorf("配置文件中没有节点信息")
 	}
 
 	// 验证配置并输出认证信息
@@ -338,7 +359,7 @@ func getUserInput() (*TradeRequest, error) {
 	}
 
 	// 获取链ID
-	fmt.Print("请输入链ID (chain_id, 默认56): ")
+	fmt.Print("请输入链ID (chain_id, 56=BSC/CT_501=Solana, 默认56): ")
 	chainID, err := reader.ReadString('\n')
 	if err != nil {
 		return nil, err
@@ -346,6 +367,29 @@ func getUserInput() (*TradeRequest, error) {
 	req.ChainID = strings.TrimSpace(chainID)
 	if req.ChainID == "" {
 		req.ChainID = "56" // 默认值
+	}
+
+	// 🔧 新增：获取价格模式
+	fmt.Print("请输入价格模式 (price_mode, limit/market/combined/auto, 默认market): ")
+	priceMode, err := reader.ReadString('\n')
+	if err != nil {
+		return nil, err
+	}
+	req.PriceMode = strings.TrimSpace(priceMode)
+	if req.PriceMode == "" {
+		req.PriceMode = "market" // 默认值，推荐买单使用
+	}
+	// 验证价格模式
+	validModes := []string{"limit", "market", "combined", "auto"}
+	isValidMode := false
+	for _, mode := range validModes {
+		if req.PriceMode == mode {
+			isValidMode = true
+			break
+		}
+	}
+	if !isValidMode {
+		return nil, fmt.Errorf("无效的价格模式: %s，支持的模式: %v", req.PriceMode, validModes)
 	}
 
 	// 获取价格精度
@@ -438,6 +482,7 @@ func sendSingleTradeRequest(node NodeConfig, tradeParams *TradeRequest) (bool, s
         "target_volume": %f,
         "base_asset": "%s",
         "chain_id": "%s",
+        "price_mode": "%s",
         "price_precision": %d,
         "auto_loop": %t,
         "csrftoken": "%s",
@@ -448,6 +493,7 @@ func sendSingleTradeRequest(node NodeConfig, tradeParams *TradeRequest) (bool, s
 		tradeParams.TargetVolume,
 		tradeParams.BaseAsset,
 		tradeParams.ChainID,
+		tradeParams.PriceMode,  // 🔧 新增：价格模式
 		tradeParams.PricePrecision,
 		tradeParams.AutoLoop,
 		tradeParams.Csrftoken,
@@ -582,6 +628,7 @@ func exportFailedNodes(results []TaskResult, tradeParams *TradeRequest) error {
 		fmt.Fprintf(file, "        \"target_volume\": %.2f,\n", tradeParams.TargetVolume)
 		fmt.Fprintf(file, "        \"base_asset\": \"%s\",\n", tradeParams.BaseAsset)
 		fmt.Fprintf(file, "        \"chain_id\": \"%s\",\n", tradeParams.ChainID)
+		fmt.Fprintf(file, "        \"price_mode\": \"%s\",\n", tradeParams.PriceMode)  // 🔧 新增
 		fmt.Fprintf(file, "        \"price_precision\": %d,\n", tradeParams.PricePrecision)
 		fmt.Fprintf(file, "        \"auto_loop\": %t,\n", tradeParams.AutoLoop)
 		fmt.Fprintf(file, "        \"csrftoken\": \"%s\",\n", result.Node.Csrftoken)

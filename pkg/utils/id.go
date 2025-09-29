@@ -122,8 +122,8 @@ func getMotherboardSerial() string {
 	return ""
 }
 
-// getMACAddress 获取MAC地址
-func getMACAddress() string {
+// GetMACAddress 获取MAC地址（公开函数）
+func GetMACAddress() string {
 	if runtime.GOOS == "windows" {
 		// 使用getmac命令获取MAC地址
 		cmd := exec.Command("getmac", "/fo", "csv", "/nh")
@@ -144,6 +144,11 @@ func getMACAddress() string {
 		}
 	}
 	return ""
+}
+
+// getMACAddress 获取MAC地址（内部使用，保持兼容性）
+func getMACAddress() string {
+	return GetMACAddress()
 }
 
 // GenerateTradeID 生成交易ID

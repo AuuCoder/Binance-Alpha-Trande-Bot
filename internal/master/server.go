@@ -2,6 +2,7 @@ package master
 
 import (
 	"alpha-autosell-bot/internal/account"
+	"alpha-autosell-bot/internal/auth"
 	"alpha-autosell-bot/internal/binance"
 	"alpha-autosell-bot/internal/task"
 	"alpha-autosell-bot/price"
@@ -13,6 +14,7 @@ import (
 	"io"
 	"log"
 	"math"
+	"math/rand"
 	"net"
 	"net/http"
 	"strconv"
@@ -25,18 +27,23 @@ import (
 
 	"alpha-autosell-bot/internal/common"
 	"alpha-autosell-bot/internal/proto"
+	"alpha-autosell-bot/pkg/network"
 	"alpha-autosell-bot/pkg/redis"
 
 	redisv8 "github.com/go-redis/redis/v8"
+	"go.mongodb.org/mongo-driver/bson"
 )
 
 // Server 主控端服务器
 type Server struct {
 	proto.UnimplementedTradingServiceServer
 
-	config      *common.Config
-	grpcServer  *grpc.Server
-	redisClient *redis.Client
+	config          *common.Config
+	grpcServer      *grpc.Server
+	httpServer      *http.Server
+	redisClient     *redis.Client
+	mongoAuthManager *auth.MongoAuthManager // 添加MongoDB授权管理器
+	useMongoAuth    bool                    // 是否使用MongoDB授权
 
 	// 节点管理
 	nodes       map[string]*NodeInfo
@@ -63,6 +70,12 @@ type Server struct {
 	// 指令确认跟踪
 	commandAcks map[string]map[string]bool // commandID -> nodeID -> acked
 	ackMutex    sync.RWMutex
+	
+	// 网络连接管理
+	connManager *network.ConnectionManager
+
+	// 价格客户端
+	priceClient interface{}
 }
 
 // NodeInfo 节点信息
@@ -110,6 +123,9 @@ type FlashTaskInfo struct {
 	TargetVolume   float64                `json:"target_volume"`
 	AutoLoop       bool                   `json:"auto_loop"`
 	PricePrecision int                    `json:"price_precision"`
+	ChainID        string                 `json:"chain_id"`        // 🔧 区块链ID
+	PriceMode      string                 `json:"price_mode"`      // 🔧 价格模式
+	SpeedMode      string                 `json:"speed_mode"`      // 🚀 新增：速度模式
 	Status         string                 `json:"status"` // created, running, completed, failed
 	StartTime      time.Time              `json:"start_time"`
 	EndTime        *time.Time             `json:"end_time,omitempty"`
@@ -143,17 +159,35 @@ func NewServer(config *common.Config) (*Server, error) {
 
 	// 创建统计管理器
 	statsManager := binance.NewStatsManager()
+	
+	// 创建MongoDB授权管理器（如果配置了MongoDB）
+	var mongoAuthManager *auth.MongoAuthManager
+	useMongoAuth := false
+	
+	// 检查是否配置了MongoDB
+	if config.MongoDB != nil && config.MongoDB.Enabled && config.MongoDB.URI != "" {
+		var err error
+		mongoAuthManager, err = auth.NewMongoAuthManager()
+		if err != nil {
+			log.Printf("⚠️ 创建MongoDB授权管理器失败: %v，将使用Redis授权", err)
+		} else {
+			useMongoAuth = true
+			log.Println("✅ MongoDB授权管理器创建成功")
+		}
+	}
 
 	server := &Server{
-		config:         config,
-		redisClient:    redisClient,
-		nodes:          make(map[string]*NodeInfo),
-		nodeCounter:    0,
-		accountManager: accountManager,
-		taskManager:    taskManager,
-		statsManager:   statsManager,
-		flashTasks:     make(map[string]*FlashTaskInfo),
-		commandAcks:    make(map[string]map[string]bool),
+		config:          config,
+		redisClient:     redisClient,
+		mongoAuthManager: mongoAuthManager,
+		useMongoAuth:    useMongoAuth,
+		nodes:           make(map[string]*NodeInfo),
+		nodeCounter:     0,
+		accountManager:  accountManager,
+		taskManager:     taskManager,
+		statsManager:    statsManager,
+		flashTasks:      make(map[string]*FlashTaskInfo),
+		commandAcks:     make(map[string]map[string]bool),
 	}
 
 	// 启动指令确认监听
@@ -162,35 +196,86 @@ func NewServer(config *common.Config) (*Server, error) {
 	return server, nil
 }
 
-// Start 启动主控端服务器
+// Start 启动服务器
 func (s *Server) Start() error {
-	// 启动gRPC服务器
-	lis, err := net.Listen("tcp", s.config.GetGRPCAddr())
-	if err != nil {
-		return err
-	}
+	// 初始化节点管理
+	s.nodes = make(map[string]*NodeInfo)
+	s.nodeCounter = 0
 
-	// 配置gRPC服务器选项
-	opts := []grpc.ServerOption{
+	// 初始化Flash Trade管理
+	s.flashTasks = make(map[string]*FlashTaskInfo)
+	s.autoSellResults = make(map[string]interface{})
+	
+	// 初始化命令确认跟踪
+	s.commandAcks = make(map[string]map[string]bool)
+
+	// 启动gRPC服务器
+	addr := s.config.GetGRPCAddr()
+	log.Printf("🚀 启动gRPC服务器: %s", addr)
+	
+	// 创建网络监听器
+	lis, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("无法监听端口 %s: %v", addr, err)
+	}
+	
+	// 创建gRPC服务器
+	s.grpcServer = grpc.NewServer(
 		grpc.KeepaliveParams(keepalive.ServerParameters{
-			Time:    time.Duration(s.config.GRPC.KeepAliveTime) * time.Second,
-			Timeout: time.Duration(s.config.GRPC.KeepAliveTimeout) * time.Second,
-		}),
-		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
-			MinTime:             30 * time.Second,
-			PermitWithoutStream: true,
+			MaxConnectionIdle:     2 * time.Minute,
+			MaxConnectionAge:      5 * time.Minute,
+			MaxConnectionAgeGrace: 30 * time.Second,
+			Time:                  30 * time.Second,
+			Timeout:               10 * time.Second,
 		}),
 		grpc.MaxRecvMsgSize(s.config.GRPC.MaxRecvMsgSize),
 		grpc.MaxSendMsgSize(s.config.GRPC.MaxSendMsgSize),
-	}
-
-	s.grpcServer = grpc.NewServer(opts...)
+	)
+	
+	// 注册服务
 	proto.RegisterTradingServiceServer(s.grpcServer, s)
-
+	
+	// 启动gRPC服务器
 	go func() {
-		log.Printf("🚀 gRPC服务器监听: %s", s.config.GetGRPCAddr())
 		if err := s.grpcServer.Serve(lis); err != nil {
-			log.Printf("❌ gRPC服务器错误: %v", err)
+			log.Fatalf("gRPC服务器错误: %v", err)
+		}
+	}()
+	
+	// 启动HTTP服务器
+	httpAddr := s.config.GetServerAddr()
+	log.Printf("🌐 启动HTTP服务器: %s", httpAddr)
+	go func() {
+		// 创建路由器
+		mux := http.NewServeMux()
+		
+		// 静态文件服务
+		fs := http.FileServer(http.Dir("web"))
+		mux.Handle("/", fs)
+		
+		// 账号状态页面特殊处理
+		mux.HandleFunc("/account-status", func(w http.ResponseWriter, r *http.Request) {
+			http.ServeFile(w, r, "web/account_status.html")
+		})
+		
+		// 节点页面特殊处理
+		mux.HandleFunc("/nodes", func(w http.ResponseWriter, r *http.Request) {
+			http.ServeFile(w, r, "web/nodes.html")
+		})
+		
+		// API路由
+		mux.HandleFunc("/api/v1/flash-trade/realtime-stats", s.handleRealtimeStats)
+		mux.HandleFunc("/api/v1/nodes", s.handleGetNodes)
+		
+		// 创建HTTP服务器
+		s.httpServer = &http.Server{
+			Addr:    httpAddr,
+			Handler: mux,
+		}
+		
+		// 启动HTTP服务器
+		if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("❌ HTTP服务器错误: %v", err)
 		}
 	}()
 
@@ -222,10 +307,11 @@ func (s *Server) Start() error {
 
 	// 从Redis恢复节点信息
 	go s.loadNodesFromRedis()
-
+	
 	// 启动节点状态监控
 	go s.startNodeStatusMonitor()
-
+	
+	log.Printf("✅ 主控端服务器启动完成")
 	return nil
 }
 
@@ -233,11 +319,26 @@ func (s *Server) Start() error {
 func (s *Server) Stop() {
 	if s.grpcServer != nil {
 		s.grpcServer.GracefulStop()
+		s.grpcServer = nil
 	}
+	
+	if s.httpServer != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		s.httpServer.Shutdown(ctx)
+	}
+	
 	if s.redisClient != nil {
 		s.redisClient.Close()
 	}
-	log.Println("✅ 主控端服务器已停止")
+	
+	// 关闭MongoDB连接
+	if s.mongoAuthManager != nil {
+		s.mongoAuthManager.Close()
+		log.Println("MongoDB授权管理器已关闭")
+	}
+	
+	log.Println("主控端服务器已停止")
 }
 
 // GetNodes 获取所有节点
@@ -316,6 +417,8 @@ func (e *FlashTradeExecutor) Execute(universalTask *task.UniversalTask, accountM
 	targetVolume, _ := params["target_volume"].(float64)
 	autoLoop, _ := params["auto_loop"].(bool) // 启用自动循环参数
 	pricePrecision, _ := params["price_precision"].(float64)
+	chainID, _ := params["chain_id"].(string)       // 🔧 新增：解析链ID
+	priceMode, _ := params["price_mode"].(string)   // 🔧 新增：解析价格模式
 
 	// 验证必要参数
 	if tokenAddress == "" {
@@ -422,6 +525,8 @@ func (e *FlashTradeExecutor) Execute(universalTask *task.UniversalTask, accountM
 						TargetVolume:   targetVolume,
 						AutoLoop:       autoLoop,
 						PricePrecision: int32(pricePrecision),
+						ChainId:        chainID,    // 🔧 新增：传递链ID
+						PriceMode:      priceMode,  // 🔧 新增：传递价格模式
 					}
 
 					log.Printf("📤 发送 Flash Trade 任务到节点 %s, 账号: %s", nodeID, accountID)
@@ -448,6 +553,8 @@ func (e *FlashTradeExecutor) Execute(universalTask *task.UniversalTask, accountM
 					TargetVolume:   targetVolume,
 					AutoLoop:       autoLoop,
 					PricePrecision: int32(pricePrecision),
+					ChainId:        chainID,    // 🔧 新增：传递链ID
+					PriceMode:      priceMode,  // 🔧 新增：传递价格模式
 				}
 
 				log.Printf("📤 发送 Flash Trade 任务到节点 %s (所有账号)", nodeID)
@@ -543,6 +650,8 @@ func (e *FlashTradeExecutor) Execute(universalTask *task.UniversalTask, accountM
 					TargetVolume:   targetVolume,
 					AutoLoop:       autoLoop,
 					PricePrecision: int32(pricePrecision),
+					ChainId:        chainID,    // 🔧 新增：传递链ID
+					PriceMode:      priceMode,  // 🔧 新增：传递价格模式
 				}
 
 				log.Printf("📤 发送 Flash Trade 任务到节点 %s (所有账号)", nodeID)
@@ -725,10 +834,20 @@ func (e *FlashTradeExecutor) executeFlashTradeBasedOnRoot(accountID string, acco
 	buyPrice = e.adjustPricePrecision(buyPrice, pricePrecision)
 
 	// 5. 计算数量和金额，确保符合币安要求
-	idealTokenAmount := usdtAmount / buyPrice
+	// 🎲 添加±5%随机浮动，避免固定买入量被风控识别
+	randomFactor := 0.95 + rand.Float64()*0.1 // 0.95 到 1.05 之间的随机数
+	adjustedUSDTAmount := usdtAmount * randomFactor
+
+	log.Printf("🎲 [%s] Master买入量随机化: 原始%.6f USDT → 调整%.6f USDT (浮动%.2f%%)",
+		accountID, usdtAmount, adjustedUSDTAmount, (randomFactor-1)*100)
+
+	idealTokenAmount := adjustedUSDTAmount / buyPrice
 	tokenAmount := float64(int(idealTokenAmount)) // 数量必须取整
 	calculatedAmount := buyPrice * tokenAmount
 	exactAmount := math.Round(calculatedAmount*100000000) / 100000000 // 8位小数精度
+
+	// 🔧 记录实际使用的USDT金额用于统计
+	actualUSDTUsed := exactAmount
 
 	// 6. 检查计算后的金额是否为0
 	if exactAmount <= 0 || tokenAmount <= 0 {
@@ -805,15 +924,15 @@ func (e *FlashTradeExecutor) executeFlashTradeBasedOnRoot(accountID string, acco
 
 	log.Printf("✅ [%s] 买入确认成功", accountID)
 
-	// 🔧 新增：Master节点买入成功后立即统计买入交易额
-	buyInCost := buyPrice * tokenAmount // 实际买入成本
+	// 🔧 新增：Master节点买入成功后立即统计买入交易额（使用实际金额）
+	buyInCost := actualUSDTUsed // 🎲 使用实际花费的USDT金额，确保统计准确
 	if buyInCost > 0 && tokenAmount > 0 {
 		// 生成唯一交易ID防止重复统计
 		tradeID := e.generateTradeID(accountID, tokenAddress, buyPrice, tokenAmount)
 		// 只统计买入交易额，损益为0（因为还没卖出）
 		e.server.statsManager.UpdateAccountStatsWithID(accountID, buyInCost, 0, tradeID)
-		log.Printf("📊 [%s] Master买入成功立即统计 - 买单金额: %.6f USDT (ID:%s)",
-			accountID, buyInCost, tradeID[:8])
+		log.Printf("📊 [%s] Master买入成功立即统计 - 实际买单金额: %.6f USDT (原始%.6f, 浮动%.2f%%) (ID:%s)",
+			accountID, buyInCost, usdtAmount, (buyInCost/usdtAmount-1)*100, tradeID[:8])
 	}
 
 	// 10. 执行智能卖出
@@ -1027,10 +1146,20 @@ func (e *FlashTradeExecutor) retryBuyWithNewPriceAttempt(account *account.Univer
 	buyPrice = e.adjustPricePrecision(buyPrice, pricePrecision)
 
 	// 重新计算数量和金额
-	idealTokenAmount := usdtAmount / buyPrice
+	// 🎲 重试时也添加随机浮动
+	retryRandomFactor := 0.95 + rand.Float64()*0.1
+	adjustedRetryUSDTAmount := usdtAmount * retryRandomFactor
+
+	log.Printf("🎲 [%s] Master重试买入量随机化: 原始%.6f USDT → 调整%.6f USDT (浮动%.2f%%)",
+		account.ID, usdtAmount, adjustedRetryUSDTAmount, (retryRandomFactor-1)*100)
+
+	idealTokenAmount := adjustedRetryUSDTAmount / buyPrice
 	tokenAmount := float64(int(idealTokenAmount))
 	calculatedAmount := buyPrice * tokenAmount
 	exactAmount := math.Round(calculatedAmount*100000000) / 100000000
+
+	// 🔧 记录重试时实际使用的USDT金额
+	retryActualUSDTUsed := exactAmount
 
 	if exactAmount <= 0 || tokenAmount <= 0 {
 		return FlashTradeResult{
@@ -1068,15 +1197,15 @@ func (e *FlashTradeExecutor) retryBuyWithNewPriceAttempt(account *account.Univer
 
 	log.Printf("✅ [%s] 重试买入确认成功", account.ID)
 
-	// 🔧 新增：Master节点重试买入成功后立即统计买入交易额
-	buyInCost := buyPrice * tokenAmount // 实际买入成本
+	// 🔧 新增：Master节点重试买入成功后立即统计买入交易额（使用实际金额）
+	buyInCost := retryActualUSDTUsed // 🎲 使用重试时实际花费的USDT金额
 	if buyInCost > 0 && tokenAmount > 0 {
 		// 生成唯一交易ID防止重复统计
 		tradeID := e.generateTradeID(account.ID, tokenAddress, buyPrice, tokenAmount)
 		// 只统计买入交易额，损益为0（因为还没卖出）
 		e.server.statsManager.UpdateAccountStatsWithID(account.ID, buyInCost, 0, tradeID)
-		log.Printf("📊 [%s] Master重试买入成功立即统计 - 买单金额: %.6f USDT (ID:%s)",
-			account.ID, buyInCost, tradeID[:8])
+		log.Printf("📊 [%s] Master重试买入成功立即统计 - 实际买单金额: %.6f USDT (原始%.6f, 浮动%.2f%%) (ID:%s)",
+			account.ID, buyInCost, usdtAmount, (buyInCost/usdtAmount-1)*100, tradeID[:8])
 	}
 
 	// 执行智能卖出
@@ -1393,7 +1522,7 @@ func (e *FlashTradeExecutor) checkOrderCanceled(orderID, csrftoken, cookie strin
 // waitForAPIRateLimit 等待API调用频率限制（基于 flash_trade.go 实现）
 var (
 	lastAPICall     time.Time
-	apiCallInterval = 100 * time.Millisecond // API调用间隔100ms
+	apiCallInterval = 300 * time.Millisecond // 🚨 风控优化：API调用间隔300ms，避免风控
 	apiCallMutex    sync.Mutex
 )
 
@@ -1774,6 +1903,18 @@ func (s *Server) RemoveAccountFromNode(accountID, nodeID string) {
 
 // isNodeAuthorized 检查节点是否已授权（内部方法）
 func (s *Server) isNodeAuthorized(nodeID string) bool {
+	// 如果使用MongoDB授权
+	if s.useMongoAuth && s.mongoAuthManager != nil {
+		// 首先检查node_auth集合
+		if s.mongoAuthManager.IsNodeAuthorized(nodeID) {
+			return true
+		}
+		
+		// 如果node_auth集合中未授权，检查nodes集合
+		return s.checkNodesCollectionAuth(nodeID)
+	}
+	
+	// 否则使用Redis授权
 	ctx := context.Background()
 	key := fmt.Sprintf("node_auth:%s", nodeID)
 
@@ -1785,6 +1926,38 @@ func (s *Server) isNodeAuthorized(nodeID string) bool {
 	return result == "authorized"
 }
 
+// checkNodesCollectionAuth 检查nodes集合中的授权状态
+func (s *Server) checkNodesCollectionAuth(nodeID string) bool {
+	if s.mongoAuthManager == nil || s.mongoAuthManager.GetClient() == nil {
+		log.Printf("🔍 主控端授权检查: 节点ID=%s, MongoDB客户端未初始化", nodeID)
+		return false
+	}
+	
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	
+	// 获取nodes集合
+	collection := s.mongoAuthManager.GetClient().Database("alpha").Collection("nodes")
+	
+	// 查询节点信息
+	var nodeInfo struct {
+		IsAuthorized int `bson:"is_authorized"`
+	}
+	err := collection.FindOne(ctx, bson.M{"node_id": nodeID}).Decode(&nodeInfo)
+	if err != nil {
+		log.Printf("🔍 主控端授权检查: 节点ID=%s, 查询失败: %v", nodeID, err)
+		return false
+	}
+	
+	// 输出授权状态
+	authorized := nodeInfo.IsAuthorized == 1
+	log.Printf("🔍 主控端授权检查: 节点ID=%s, 授权状态=%v (is_authorized=%d)", 
+		nodeID, authorized, nodeInfo.IsAuthorized)
+	
+	// 返回授权状态
+	return authorized
+}
+
 // IsNodeAuthorized 检查节点是否已授权（公开方法）
 func (s *Server) IsNodeAuthorized(nodeID string) bool {
 	return s.isNodeAuthorized(nodeID)
@@ -1792,15 +1965,32 @@ func (s *Server) IsNodeAuthorized(nodeID string) bool {
 
 // AuthorizeNode 授权节点
 func (s *Server) AuthorizeNode(nodeID string) error {
-	ctx := context.Background()
-	key := fmt.Sprintf("node_auth:%s", nodeID)
+	// 如果使用MongoDB授权
+	if s.useMongoAuth && s.mongoAuthManager != nil {
+		// 创建节点元数据
+		metadata := map[string]interface{}{
+			"authorized_time": time.Now().Format(time.RFC3339),
+		}
+		
+		// 调用MongoDB授权管理器
+		err := s.mongoAuthManager.AuthorizeNode(nodeID, metadata)
+		if err != nil {
+			return fmt.Errorf("MongoDB授权节点失败: %v", err)
+		}
+		
+		log.Printf("✅ 节点 %s 已通过MongoDB授权", nodeID)
+	} else {
+		// 使用Redis授权
+		ctx := context.Background()
+		key := fmt.Sprintf("node_auth:%s", nodeID)
 
-	err := s.redisClient.GetNativeClient().Set(ctx, key, "authorized", 0).Err()
-	if err != nil {
-		return fmt.Errorf("授权节点失败: %v", err)
+		err := s.redisClient.GetNativeClient().Set(ctx, key, "authorized", 0).Err()
+		if err != nil {
+			return fmt.Errorf("授权节点失败: %v", err)
+		}
+
+		log.Printf("✅ 节点 %s 已通过Redis授权", nodeID)
 	}
-
-	log.Printf("✅ 节点 %s 已授权", nodeID)
 
 	// 授权后立即同步账号数据
 	go s.syncAccountsToNode(nodeID)
@@ -1810,15 +2000,27 @@ func (s *Server) AuthorizeNode(nodeID string) error {
 
 // RevokeNodeAuthorization 撤销节点授权
 func (s *Server) RevokeNodeAuthorization(nodeID string) error {
-	ctx := context.Background()
-	key := fmt.Sprintf("node_auth:%s", nodeID)
+	// 如果使用MongoDB授权
+	if s.useMongoAuth && s.mongoAuthManager != nil {
+		// 调用MongoDB授权管理器
+		err := s.mongoAuthManager.RevokeNodeAuthorization(nodeID)
+		if err != nil {
+			return fmt.Errorf("MongoDB撤销节点授权失败: %v", err)
+		}
+		
+		log.Printf("⚠️ 节点 %s 授权已通过MongoDB撤销", nodeID)
+	} else {
+		// 使用Redis授权
+		ctx := context.Background()
+		key := fmt.Sprintf("node_auth:%s", nodeID)
 
-	err := s.redisClient.GetNativeClient().Del(ctx, key).Err()
-	if err != nil {
-		return fmt.Errorf("撤销节点授权失败: %v", err)
+		err := s.redisClient.GetNativeClient().Del(ctx, key).Err()
+		if err != nil {
+			return fmt.Errorf("撤销节点授权失败: %v", err)
+		}
+
+		log.Printf("⚠️ 节点 %s 授权已通过Redis撤销", nodeID)
 	}
-
-	log.Printf("⚠️ 节点 %s 授权已撤销", nodeID)
 
 	// 撤销授权后，清理该节点的所有账号
 	go s.cleanupNodeAccounts(nodeID)
@@ -1828,6 +2030,24 @@ func (s *Server) RevokeNodeAuthorization(nodeID string) error {
 
 // GetAuthorizedNodes 获取所有已授权的节点
 func (s *Server) GetAuthorizedNodes() ([]string, error) {
+	// 如果使用MongoDB授权
+	if s.useMongoAuth && s.mongoAuthManager != nil {
+		// 调用MongoDB授权管理器
+		nodes, err := s.mongoAuthManager.GetAuthorizedNodes()
+		if err != nil {
+			return nil, fmt.Errorf("MongoDB获取授权节点失败: %v", err)
+		}
+		
+		// 提取节点ID
+		var nodeIDs []string
+		for _, node := range nodes {
+			nodeIDs = append(nodeIDs, node.NodeID)
+		}
+		
+		return nodeIDs, nil
+	}
+	
+	// 使用Redis授权
 	ctx := context.Background()
 	pattern := "node_auth:*"
 
@@ -1839,7 +2059,12 @@ func (s *Server) GetAuthorizedNodes() ([]string, error) {
 	var authorizedNodes []string
 	for _, key := range keys {
 		nodeID := strings.TrimPrefix(key, "node_auth:")
-		authorizedNodes = append(authorizedNodes, nodeID)
+		
+		// 检查是否已授权
+		result, err := s.redisClient.GetNativeClient().Get(ctx, key).Result()
+		if err == nil && result == "authorized" {
+			authorizedNodes = append(authorizedNodes, nodeID)
+		}
 	}
 
 	return authorizedNodes, nil
@@ -2007,6 +2232,9 @@ func (s *Server) StartFlashTrade(ctx context.Context, req *proto.FlashTradeReque
 		TargetVolume:   req.TargetVolume,
 		AutoLoop:       req.AutoLoop,
 		PricePrecision: int(req.PricePrecision),
+		ChainID:        req.ChainId,        // 🔧 支持多链
+		PriceMode:      req.PriceMode,      // 🔧 支持价格模式
+		// SpeedMode字段已移除
 		Status:         "created",
 		StartTime:      time.Now(),
 		TargetNodes:    []string{req.NodeId},
@@ -2042,6 +2270,8 @@ func (s *Server) StartFlashTrade(ctx context.Context, req *proto.FlashTradeReque
 			"target_volume":   req.TargetVolume,
 			"auto_loop":       req.AutoLoop,
 			"price_precision": req.PricePrecision,
+			"chain_id":        req.ChainId,    // 🔧 新增：传递链ID
+			"price_mode":      req.PriceMode,  // 🔧 新增：传递价格模式
 			"target_accounts": targetAccounts, // 正确的账号列表
 		},
 	}
@@ -3269,3 +3499,194 @@ func (s *Server) waitForFlashCommandAckFromAllNodes(commandID string, timeout ti
 		}
 	}
 }
+
+// getAccountAuthFromRedis 从Redis获取账号认证信息
+func (s *Server) getAccountAuthFromRedis(accountID string) (*AccountAuth, error) {
+	// 如果使用MongoDB授权
+	if s.useMongoAuth && s.mongoAuthManager != nil {
+		// 从MongoDB获取账号信息
+		account, err := s.mongoAuthManager.GetAccountAuth(accountID)
+		if err != nil {
+			return nil, fmt.Errorf("从MongoDB获取账号认证信息失败: %v", err)
+		}
+		
+		// 转换为AccountAuth格式
+		return &AccountAuth{
+			AccountID: account.AccountID,
+			Csrftoken: account.Csrftoken,
+			Cookie:    account.Cookie,
+			LastUsed:  time.Now(),
+		}, nil
+	}
+
+	// 否则从Redis获取
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// 尝试从flash_trade_auth键获取
+	key := fmt.Sprintf("flash_trade_auth:%s", accountID)
+	authData, err := s.redisClient.GetNativeClient().Get(ctx, key).Result()
+	if err != nil {
+		if err == redisv8.Nil {
+			// 尝试从account键获取
+			key = fmt.Sprintf("account:%s", accountID)
+			accountData, err := s.redisClient.GetNativeClient().Get(ctx, key).Result()
+			if err != nil {
+				return nil, fmt.Errorf("账号不存在: %s", accountID)
+			}
+
+			// 解析账号数据
+			var accountInfo map[string]interface{}
+			if err := json.Unmarshal([]byte(accountData), &accountInfo); err != nil {
+				return nil, fmt.Errorf("解析账号数据失败: %v", err)
+			}
+
+			// 提取认证信息
+			csrftoken, _ := accountInfo["csrftoken"].(string)
+			cookie, _ := accountInfo["cookie"].(string)
+
+			if csrftoken == "" || cookie == "" {
+				return nil, fmt.Errorf("账号认证信息不完整")
+			}
+
+			return &AccountAuth{
+				AccountID: accountID,
+				Csrftoken: csrftoken,
+				Cookie:    cookie,
+				LastUsed:  time.Now(),
+			}, nil
+		}
+		return nil, fmt.Errorf("获取账号认证信息失败: %v", err)
+	}
+
+	// 解析flash_trade认证数据
+	var auth AccountAuth
+	if err := json.Unmarshal([]byte(authData), &auth); err != nil {
+		return nil, fmt.Errorf("解析认证数据失败: %v", err)
+	}
+
+	return &auth, nil
+}
+
+// AccountAuth 账号认证信息
+type AccountAuth struct {
+	AccountID string    `json:"account_id"`
+	Csrftoken string    `json:"csrftoken"`
+	Cookie    string    `json:"cookie"`
+	LastUsed  time.Time `json:"last_used"`
+}
+
+// handleRealtimeStats 处理实时统计请求
+func (s *Server) handleRealtimeStats(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	// 获取所有节点的统计数据
+	s.nodesMutex.RLock()
+	nodes := s.nodes
+	s.nodesMutex.RUnlock()
+
+	// 汇总统计数据
+	var totalAccounts, activeAccounts int
+	var totalVolume, totalLoss float64
+	var completionRate float64
+	var accountDetails = make(map[string]interface{})
+
+	for _, node := range nodes {
+		// 从节点统计中提取数据
+		if stats, exists := node.Stats["flash_trade_stats"]; exists {
+			if statsMap, ok := stats.(map[string]interface{}); ok {
+				// 提取活跃账户数
+				if active, ok := statsMap["active_accounts"].(float64); ok {
+					activeAccounts += int(active)
+				}
+				
+				// 提取总账户数
+				if total, ok := statsMap["total_accounts"].(float64); ok {
+					totalAccounts += int(total)
+				}
+				
+				// 提取交易量
+				if volume, ok := statsMap["total_volume"].(float64); ok {
+					totalVolume += volume
+				}
+				
+				// 提取损失
+				if loss, ok := statsMap["total_loss"].(float64); ok {
+					totalLoss += loss
+				}
+			}
+		}
+		
+		// 收集账户详情
+		if accounts, exists := node.Stats["账户详情"]; exists {
+			if accountsMap, ok := accounts.(map[string]interface{}); ok {
+				for accountID, details := range accountsMap {
+					accountDetails[accountID] = details
+				}
+			}
+		}
+	}
+
+	// 计算完成率
+	if totalVolume > 0 {
+		completionRate = (totalVolume / 100000) * 100 // 假设目标是10万
+	}
+
+	// 构建响应
+	response := map[string]interface{}{
+		"success": true,
+		"timestamp": time.Now().Format(time.RFC3339),
+		"stats": map[string]interface{}{
+			"total_accounts": totalAccounts,
+			"active_accounts": activeAccounts,
+			"total_volume": totalVolume,
+			"total_loss": totalLoss,
+			"completion_rate": completionRate,
+			"loss_rate": func() float64 { if totalVolume > 0 { return (totalLoss / totalVolume) * 10000 } else { return 0 } }(), // 万分比
+		},
+		"accounts": accountDetails,
+	}
+
+	// 添加中文字段
+	response["成功"] = true
+	response["时间戳"] = time.Now().Format(time.RFC3339)
+	response["统计"] = map[string]interface{}{
+		"总账户数": totalAccounts,
+		"活跃账户数": activeAccounts,
+		"总交易量": totalVolume,
+		"总损失": totalLoss,
+		"完成率": completionRate,
+		"损失率": func() float64 { if totalVolume > 0 { return (totalLoss / totalVolume) * 10000 } else { return 0 } }(), // 万分比
+	}
+	response["账户"] = accountDetails
+
+	// 返回JSON响应
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		log.Printf("❌ 编码实时统计响应失败: %v", err)
+		http.Error(w, "内部服务器错误", http.StatusInternalServerError)
+	}
+}
+
+// handleGetNodes 处理获取节点信息的请求
+func (s *Server) handleGetNodes(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	// 获取所有节点的统计数据
+	s.nodesMutex.RLock()
+	nodes := s.nodes
+	s.nodesMutex.RUnlock()
+
+	// 构建响应
+	response := make(map[string]interface{})
+	response["success"] = true
+	response["nodes"] = nodes
+
+	// 返回JSON响应
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		log.Printf("❌ 编码节点信息响应失败: %v", err)
+		http.Error(w, "内部服务器错误", http.StatusInternalServerError)
+	}
+}
+

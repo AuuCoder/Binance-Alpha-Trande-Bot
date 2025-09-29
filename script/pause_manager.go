@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -15,51 +14,44 @@ import (
 	"time"
 )
 
-// CleanupRequest 清理挂单请求结构体
-type CleanupRequest struct {
-	AccountID string `json:"account_id"`
+// NodeConfig 节点配置结构体
+type NodeConfig struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	IP        string `json:"ip"`
 	Csrftoken string `json:"csrftoken"`
 	Cookie    string `json:"cookie"`
-	Force     bool   `json:"force"`
 }
 
-// PauseRequest 暂停请求结构体
-type PauseRequest struct {
-	AccountID string `json:"account_id"`
-	Duration  int    `json:"duration"` // 暂停时长（秒）
-	Reason    string `json:"reason"`   // 暂停原因
+// CleanupRequest 清理请求结构体
+type CleanupRequest struct {
+	AccountID      string `json:"account_id"`
+	TokenAddress   string `json:"token_address,omitempty"`   // 可选，指定要清理的代币地址
+	BaseAsset      string `json:"base_asset,omitempty"`      // 可选，指定要清理的基础资产
+	PauseDuration  int    `json:"pause_duration"`            // 暂停时长（秒），默认300秒
+	PricePrecision int    `json:"price_precision,omitempty"` // 价格精度，默认8位
+	Csrftoken      string `json:"csrftoken"`
+	Cookie         string `json:"cookie"`
 }
 
 // CleanupResponse 清理响应结构体
 type CleanupResponse struct {
-	Success      bool   `json:"success"`
-	Message      string `json:"message"`
-	CleanedCount int    `json:"cleaned_count"`
+	Success bool                   `json:"success"`
+	Message string                 `json:"message"`
+	Results map[string]interface{} `json:"results"`
 }
 
-// PauseResponse 暂停响应结构体
-type PauseResponse struct {
-	Success   bool   `json:"success"`
-	Message   string `json:"message"`
-	AccountID string `json:"account_id"`
-	Duration  int    `json:"duration"`
-	Reason    string `json:"reason"`
-	PauseEnd  int64  `json:"pause_end"`
-}
-
-// OperationResult 操作结果
-type OperationResult struct {
-	Node         NodeConfig
-	CleanupOK    bool
-	PauseOK      bool
-	CleanupMsg   string
-	PauseMsg     string
-	CleanedCount int
+// TaskResult 任务执行结果
+type TaskResult struct {
+	Node    NodeConfig
+	Success bool
+	Message string
+	Retries int
 }
 
 func main() {
 	fmt.Println("========================================")
-	fmt.Println("⏸️  Flash Trade 暂停管理脚本 v1.0")
+	fmt.Println("🧹 Flash Trade 账户管理脚本 v1.0")
 	fmt.Println("========================================")
 
 	// 显示运行环境信息
@@ -92,367 +84,473 @@ func main() {
 	}
 	fmt.Println()
 
-	// 获取用户输入的暂停参数
-	pauseParams, err := getUserInput()
-	if err != nil {
-		fmt.Printf("❌ 获取用户输入失败: %v\n", err)
+	// 选择操作模式
+	mode := selectMode()
+	if mode == "" {
+		fmt.Println("❌ 未选择操作模式，程序退出")
 		return
 	}
 
-	// 显示操作摘要
-	fmt.Println("========================================")
-	fmt.Println("📋 操作摘要:")
-	fmt.Printf("   暂停时长: %d 小时 (%d 秒)\n", pauseParams.Duration/3600, pauseParams.Duration)
-	fmt.Printf("   暂停原因: %s\n", pauseParams.Reason)
-	fmt.Printf("   目标节点: %d 个\n", len(nodes))
-	fmt.Println("========================================")
-
-	// 确认执行
-	if !confirmExecution() {
-		fmt.Println("❌ 操作已取消")
+	// 选择要执行的节点
+	selectedNodes := selectNodes(nodes)
+	if len(selectedNodes) == 0 {
+		fmt.Println("❌ 未选择任何节点，程序退出")
 		return
 	}
 
-	fmt.Println()
-	fmt.Println("🚀 开始执行暂停管理操作...")
-	fmt.Println()
+	var results []TaskResult
 
-	// 并发执行操作
-	var wg sync.WaitGroup
-	results := make(chan OperationResult, len(nodes))
+	if mode == "pause" {
+		// 获取用户输入的清理参数
+		cleanupParams, err := getUserInput()
+		if err != nil {
+			fmt.Printf("❌ 获取用户输入失败: %v\n", err)
+			return
+		}
 
-	for _, node := range nodes {
-		wg.Add(1)
-		go func(n NodeConfig) {
-			defer wg.Done()
-			result := executeOperation(n, pauseParams)
-			results <- result
-		}(node)
+		// 执行批量暂停与清理任务
+		results = executeBatchCleanup(selectedNodes, cleanupParams)
+	} else if mode == "resume" {
+		// 执行批量恢复任务
+		results = executeBatchResume(selectedNodes)
 	}
 
-	// 等待所有操作完成
-	wg.Wait()
-	close(results)
-
-	// 收集并显示结果
-	fmt.Println()
-	fmt.Println("========================================")
-	fmt.Println("📊 操作结果汇总:")
+	// 显示执行结果
+	fmt.Println("\n========================================")
+	fmt.Println("📊 执行结果统计")
 	fmt.Println("========================================")
 
 	successCount := 0
-	totalCleaned := 0
-
-	for result := range results {
-		fmt.Printf("\n🖥️  节点: %s (%s)\n", result.Node.Name, result.Node.ID)
-
-		if result.CleanupOK {
-			fmt.Printf("   🧹 挂单清理: ✅ 成功 (清理了 %d 个挂单)\n", result.CleanedCount)
-			totalCleaned += result.CleanedCount
-		} else {
-			fmt.Printf("   🧹 挂单清理: ❌ 失败 - %s\n", result.CleanupMsg)
-		}
-
-		if result.PauseOK {
-			fmt.Printf("   ⏸️  账号暂停: ✅ 成功\n")
-		} else {
-			fmt.Printf("   ⏸️  账号暂停: ❌ 失败 - %s\n", result.PauseMsg)
-		}
-
-		if result.CleanupOK && result.PauseOK {
+	for _, result := range results {
+		if result.Success {
 			successCount++
 		}
 	}
 
+	fmt.Printf("✅ 成功: %d\n", successCount)
+	fmt.Printf("❌ 失败: %d\n", len(results)-successCount)
 	fmt.Println()
-	fmt.Printf("✅ 成功操作节点: %d/%d\n", successCount, len(nodes))
-	fmt.Printf("🧹 总计清理挂单: %d 个\n", totalCleaned)
 
-	if successCount == len(nodes) {
-		fmt.Println("🎉 所有节点操作完成！账号已暂停，等待手动恢复。")
-		fmt.Println()
-		fmt.Println("💡 恢复方法:")
-		fmt.Println("   DELETE http://节点IP:8080/pause-status?account_id=账号ID")
-		fmt.Println("   或使用 Web 界面手动恢复")
-	} else {
-		fmt.Println("⚠️  部分节点操作失败，请检查失败的节点")
+	// 显示详细结果
+	fmt.Println("📋 详细结果:")
+	for i, result := range results {
+		statusIcon := "❌"
+		if result.Success {
+			statusIcon = "✅"
+		}
+		fmt.Printf("%s [%d] %s (%s): %s\n", statusIcon, i+1, result.Node.Name, result.Node.ID, result.Message)
 	}
 
-	fmt.Println()
-	fmt.Println("程序执行完成，按回车键退出...")
-	bufio.NewReader(os.Stdin).ReadLine()
+	fmt.Println("\n🏁 批量操作任务执行完毕")
+	fmt.Println("按任意键退出...")
+	bufio.NewReader(os.Stdin).ReadString('\n')
 }
 
-// loadConfig 加载配置文件
-func loadConfig(filename string) ([]NodeConfig, error) {
-	// 尝试多个可能的配置文件路径
-	possiblePaths := []string{
-		filename,
-		filepath.Join(".", filename),
-		filepath.Join("script", filename),
-		filepath.Join("..", filename),
+// selectMode 选择操作模式
+func selectMode() string {
+	reader := bufio.NewReader(os.Stdin)
+	fmt.Println("🔍 请选择操作模式:")
+	fmt.Println("   1. 暂停账户并清理 (Pause & Cleanup)")
+	fmt.Println("   2. 恢复账户 (Resume)")
+	fmt.Print("请输入选择 [1]: ")
+	
+	choice, _ := reader.ReadString('\n')
+	choice = strings.TrimSpace(choice)
+	
+	if choice == "" || choice == "1" {
+		fmt.Println("✅ 已选择: 暂停账户并清理")
+		return "pause"
+	}
+	
+	if choice == "2" {
+		fmt.Println("✅ 已选择: 恢复账户")
+		return "resume"
+	}
+	
+	fmt.Println("⚠️ 无效的选择，默认使用暂停模式")
+	return "pause"
+}
+
+// loadConfig 从配置文件加载节点信息
+func loadConfig(configFile string) ([]NodeConfig, error) {
+	// 尝试在多个位置查找配置文件
+	searchPaths := []string{
+		configFile,
+		filepath.Join(".", configFile),
+		filepath.Join("..", configFile),
+		filepath.Join(filepath.Dir(os.Args[0]), configFile),
 	}
 
 	var configData []byte
 	var err error
-	var usedPath string
 
-	for _, path := range possiblePaths {
+	for _, path := range searchPaths {
 		configData, err = ioutil.ReadFile(path)
 		if err == nil {
-			usedPath = path
+			fmt.Printf("📄 使用配置文件: %s\n", path)
 			break
 		}
 	}
 
 	if err != nil {
-		return nil, fmt.Errorf("无法找到配置文件 %s: %v", filename, err)
+		return nil, fmt.Errorf("无法找到或读取配置文件: %v", err)
 	}
 
-	fmt.Printf("📄 使用配置文件: %s\n", usedPath)
-
+	// 尝试直接解析为节点数组
 	var nodes []NodeConfig
 	if err := json.Unmarshal(configData, &nodes); err != nil {
-		return nil, fmt.Errorf("解析配置文件失败: %v", err)
+		// 如果直接解析失败，尝试解析为包含nodes字段的对象
+		var config struct {
+			Nodes []NodeConfig `json:"nodes"`
+		}
+		
+		if err := json.Unmarshal(configData, &config); err != nil {
+			return nil, fmt.Errorf("解析配置文件失败: %v", err)
+		}
+		
+		nodes = config.Nodes
 	}
 
 	return nodes, nil
 }
 
-// getUserInput 获取用户输入的暂停参数
-func getUserInput() (*PauseRequest, error) {
+// getUserInput 获取用户输入的清理参数
+func getUserInput() (CleanupRequest, error) {
 	reader := bufio.NewReader(os.Stdin)
-	req := &PauseRequest{}
+	var cleanupParams CleanupRequest
 
-	// 获取暂停时长（小时）
-	fmt.Print("请输入暂停时长（小时，默认24小时）: ")
-	durationStr, err := reader.ReadString('\n')
-	if err != nil {
-		return nil, err
+	// 默认值
+	cleanupParams.PauseDuration = 300     // 默认暂停5分钟
+	cleanupParams.PricePrecision = 8      // 默认精度8位
+
+	fmt.Println("📝 请输入清理参数 (直接回车使用默认值)")
+	fmt.Println("----------------------------------------")
+
+	// 获取代币地址（可选）
+	fmt.Print("🔑 代币地址 (可选): ")
+	tokenAddress, _ := reader.ReadString('\n')
+	cleanupParams.TokenAddress = strings.TrimSpace(tokenAddress)
+
+	// 如果提供了代币地址，询问基础资产
+	if cleanupParams.TokenAddress != "" {
+		fmt.Print("💱 基础资产 (可选，如不提供将自动推断): ")
+		baseAsset, _ := reader.ReadString('\n')
+		cleanupParams.BaseAsset = strings.TrimSpace(baseAsset)
 	}
-	durationStr = strings.TrimSpace(durationStr)
-	if durationStr == "" {
-		req.Duration = 24 * 3600 // 默认24小时
-	} else {
-		hours, err := strconv.Atoi(durationStr)
+
+	// 获取暂停时长
+	fmt.Print("⏱️ 暂停时长 (秒，默认300): ")
+	pauseDurationStr, _ := reader.ReadString('\n')
+	pauseDurationStr = strings.TrimSpace(pauseDurationStr)
+	if pauseDurationStr != "" {
+		pauseDuration, err := strconv.Atoi(pauseDurationStr)
+		if err == nil && pauseDuration > 0 {
+			cleanupParams.PauseDuration = pauseDuration
+		}
+	}
+
+	// 如果提供了代币地址，询问价格精度
+	if cleanupParams.TokenAddress != "" {
+		fmt.Print("🔢 价格精度 (默认8): ")
+		precisionStr, _ := reader.ReadString('\n')
+		precisionStr = strings.TrimSpace(precisionStr)
+		if precisionStr != "" {
+			precision, err := strconv.Atoi(precisionStr)
+			if err == nil && precision > 0 {
+				cleanupParams.PricePrecision = precision
+			}
+		}
+	}
+
+	fmt.Println("----------------------------------------")
+	return cleanupParams, nil
+}
+
+// selectNodes 选择要执行的节点
+func selectNodes(nodes []NodeConfig) []NodeConfig {
+	reader := bufio.NewReader(os.Stdin)
+	fmt.Println("🔍 请选择要执行的节点:")
+	fmt.Println("   1. 全部节点")
+	fmt.Println("   2. 指定节点 (输入序号，多个用逗号分隔)")
+	fmt.Print("请输入选择 [1]: ")
+	
+	choice, _ := reader.ReadString('\n')
+	choice = strings.TrimSpace(choice)
+	
+	if choice == "" || choice == "1" {
+		fmt.Printf("✅ 已选择全部 %d 个节点\n", len(nodes))
+		return nodes
+	}
+	
+	if choice == "2" {
+		fmt.Print("请输入节点序号 (例如: 1,3,5): ")
+		indexStr, _ := reader.ReadString('\n')
+		indexStr = strings.TrimSpace(indexStr)
+		
+		indexStrs := strings.Split(indexStr, ",")
+		selectedNodes := make([]NodeConfig, 0)
+		
+		for _, idxStr := range indexStrs {
+			idxStr = strings.TrimSpace(idxStr)
+			idx, err := strconv.Atoi(idxStr)
+			if err != nil || idx < 1 || idx > len(nodes) {
+				fmt.Printf("⚠️ 忽略无效的节点序号: %s\n", idxStr)
+				continue
+			}
+			selectedNodes = append(selectedNodes, nodes[idx-1])
+		}
+		
+		fmt.Printf("✅ 已选择 %d 个节点\n", len(selectedNodes))
+		return selectedNodes
+	}
+	
+	fmt.Println("⚠️ 无效的选择，默认使用全部节点")
+	return nodes
+}
+
+// executeBatchCleanup 执行批量清理任务
+func executeBatchCleanup(nodes []NodeConfig, params CleanupRequest) []TaskResult {
+	fmt.Println("\n========================================")
+	fmt.Println("🚀 开始执行批量暂停与清理任务")
+	fmt.Println("========================================")
+
+	var wg sync.WaitGroup
+	results := make([]TaskResult, len(nodes))
+	resultMutex := sync.Mutex{}
+
+	// 显示进度条
+	fmt.Printf("进度: [%s] 0/%d\n", strings.Repeat(" ", len(nodes)), len(nodes))
+
+	for i, node := range nodes {
+		wg.Add(1)
+		go func(index int, node NodeConfig) {
+			defer wg.Done()
+
+			// 复制请求参数，并设置认证信息
+			req := params
+			req.AccountID = node.ID
+			req.Csrftoken = node.Csrftoken
+			req.Cookie = node.Cookie
+
+			// 执行清理请求
+			result := executeCleanup(node, req)
+			
+			// 保存结果
+			resultMutex.Lock()
+			results[index] = result
+			
+			// 更新进度条
+			completed := 0
+			for _, r := range results {
+				if r.Node.ID != "" {
+					completed++
+				}
+			}
+			progressBar := strings.Repeat("█", completed) + strings.Repeat(" ", len(nodes)-completed)
+			fmt.Printf("\r进度: [%s] %d/%d", progressBar, completed, len(nodes))
+			
+			resultMutex.Unlock()
+		}(i, node)
+	}
+
+	wg.Wait()
+	fmt.Println() // 进度条完成后换行
+	return results
+}
+
+// executeBatchResume 执行批量恢复任务
+func executeBatchResume(nodes []NodeConfig) []TaskResult {
+	fmt.Println("\n========================================")
+	fmt.Println("🚀 开始执行批量恢复任务")
+	fmt.Println("========================================")
+
+	var wg sync.WaitGroup
+	results := make([]TaskResult, len(nodes))
+	resultMutex := sync.Mutex{}
+
+	// 显示进度条
+	fmt.Printf("进度: [%s] 0/%d\n", strings.Repeat(" ", len(nodes)), len(nodes))
+
+	for i, node := range nodes {
+		wg.Add(1)
+		go func(index int, node NodeConfig) {
+			defer wg.Done()
+
+			// 执行恢复请求
+			result := executeResume(node)
+			
+			// 保存结果
+			resultMutex.Lock()
+			results[index] = result
+			
+			// 更新进度条
+			completed := 0
+			for _, r := range results {
+				if r.Node.ID != "" {
+					completed++
+				}
+			}
+			progressBar := strings.Repeat("█", completed) + strings.Repeat(" ", len(nodes)-completed)
+			fmt.Printf("\r进度: [%s] %d/%d", progressBar, completed, len(nodes))
+			
+			resultMutex.Unlock()
+		}(i, node)
+	}
+
+	wg.Wait()
+	fmt.Println() // 进度条完成后换行
+	return results
+}
+
+// executeCleanup 执行单个清理任务
+func executeCleanup(node NodeConfig, params CleanupRequest) TaskResult {
+	result := TaskResult{
+		Node:    node,
+		Success: false,
+		Message: "未知错误",
+		Retries: 0,
+	}
+
+	// 构建请求URL
+	url := fmt.Sprintf("http://%s/complete-cleanup", node.IP)
+	if !strings.Contains(url, "://") {
+		url = "http://" + url
+	}
+
+	// 序列化请求体
+	reqBody, err := json.Marshal(params)
+	if err != nil {
+		result.Message = fmt.Sprintf("序列化请求失败: %v", err)
+		return result
+	}
+
+	// 最多重试3次
+	maxRetries := 3
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		result.Retries = attempt
+
+		// 创建HTTP请求
+		req, err := http.NewRequest("POST", url, strings.NewReader(string(reqBody)))
 		if err != nil {
-			return nil, fmt.Errorf("暂停时长格式错误: %v", err)
+			result.Message = fmt.Sprintf("创建HTTP请求失败: %v", err)
+			continue
 		}
-		if hours <= 0 {
-			return nil, fmt.Errorf("暂停时长必须大于0")
+
+		req.Header.Set("Content-Type", "application/json")
+
+		// 发送请求
+		client := &http.Client{Timeout: 30 * time.Second}
+		resp, err := client.Do(req)
+		if err != nil {
+			result.Message = fmt.Sprintf("发送请求失败: %v", err)
+			time.Sleep(1 * time.Second) // 重试前等待
+			continue
 		}
-		req.Duration = hours * 3600 // 转换为秒
-	}
 
-	// 获取暂停原因
-	fmt.Print("请输入暂停原因（默认: manual_maintenance）: ")
-	reason, err := reader.ReadString('\n')
-	if err != nil {
-		return nil, err
-	}
-	req.Reason = strings.TrimSpace(reason)
-	if req.Reason == "" {
-		req.Reason = "manual_maintenance"
-	}
+		// 读取响应
+		defer resp.Body.Close()
+		respBody, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			result.Message = fmt.Sprintf("读取响应失败: %v", err)
+			continue
+		}
 
-	return req, nil
-}
+		// 解析响应
+		var cleanupResp CleanupResponse
+		if err := json.Unmarshal(respBody, &cleanupResp); err != nil {
+			result.Message = fmt.Sprintf("解析响应失败: %v", err)
+			continue
+		}
 
-// confirmExecution 确认执行
-func confirmExecution() bool {
-	reader := bufio.NewReader(os.Stdin)
-	fmt.Print("确认执行暂停管理操作? (y/N): ")
-	confirm, err := reader.ReadString('\n')
-	if err != nil {
-		return false
-	}
-	confirm = strings.ToLower(strings.TrimSpace(confirm))
-	return confirm == "y" || confirm == "yes"
-}
-
-// executeOperation 执行完整的暂停管理操作
-func executeOperation(node NodeConfig, pauseParams *PauseRequest) OperationResult {
-	result := OperationResult{
-		Node: node,
-	}
-
-	fmt.Printf("🔄 [%s] 开始处理节点...\n", node.Name)
-
-	// 第一步：清理挂单
-	fmt.Printf("🧹 [%s] 步骤1: 清理挂单...\n", node.Name)
-	cleanupReq := CleanupRequest{
-		AccountID: node.ID,
-		Csrftoken: node.Csrftoken,
-		Cookie:    node.Cookie,
-		Force:     true, // 强制清理所有挂单
-	}
-
-	cleanupResp, err := sendCleanupRequest(node, cleanupReq)
-	if err != nil {
-		result.CleanupMsg = fmt.Sprintf("请求失败: %v", err)
-		fmt.Printf("❌ [%s] 挂单清理失败: %v\n", node.Name, err)
-		return result
-	}
-
-	if cleanupResp.Success {
-		result.CleanupOK = true
-		result.CleanedCount = cleanupResp.CleanedCount
-		result.CleanupMsg = cleanupResp.Message
-		fmt.Printf("✅ [%s] 挂单清理成功，清理了 %d 个挂单\n", node.Name, cleanupResp.CleanedCount)
-	} else {
-		result.CleanupMsg = cleanupResp.Message
-		fmt.Printf("❌ [%s] 挂单清理失败: %s\n", node.Name, cleanupResp.Message)
-		return result
-	}
-
-	// 等待清理生效
-	fmt.Printf("⏳ [%s] 等待挂单清理生效...\n", node.Name)
-	time.Sleep(3 * time.Second)
-
-	// 第二步：验证没有挂单
-	fmt.Printf("🔍 [%s] 步骤2: 验证挂单清理...\n", node.Name)
-	if !verifyNoOrders(node) {
-		result.CleanupMsg = "验证失败，仍有挂单存在"
-		fmt.Printf("⚠️ [%s] 警告: 仍有挂单存在，但继续执行暂停\n", node.Name)
-	}
-
-	// 第三步：设置暂停
-	fmt.Printf("⏸️ [%s] 步骤3: 设置账号暂停...\n", node.Name)
-	pauseReq := PauseRequest{
-		AccountID: node.ID,
-		Duration:  pauseParams.Duration,
-		Reason:    pauseParams.Reason,
-	}
-
-	pauseResp, err := sendPauseRequest(node, pauseReq)
-	if err != nil {
-		result.PauseMsg = fmt.Sprintf("请求失败: %v", err)
-		fmt.Printf("❌ [%s] 账号暂停失败: %v\n", node.Name, err)
-		return result
-	}
-
-	if pauseResp.Success {
-		result.PauseOK = true
-		result.PauseMsg = pauseResp.Message
-		endTime := time.Unix(pauseResp.PauseEnd, 0)
-		fmt.Printf("✅ [%s] 账号暂停成功，预计恢复时间: %s\n", node.Name, endTime.Format("2006-01-02 15:04:05"))
-	} else {
-		result.PauseMsg = pauseResp.Message
-		fmt.Printf("❌ [%s] 账号暂停失败: %s\n", node.Name, pauseResp.Message)
+		// 检查响应状态
+		if cleanupResp.Success {
+			result.Success = true
+			if params.TokenAddress != "" {
+				result.Message = fmt.Sprintf("暂停成功，清理了%v个挂单，代币清理: %v", 
+					cleanupResp.Results["orders_cleaned"], 
+					cleanupResp.Results["token_clean"])
+			} else {
+				result.Message = fmt.Sprintf("暂停成功，清理了%v个挂单", 
+					cleanupResp.Results["orders_cleaned"])
+			}
+			return result
+		} else {
+			result.Message = fmt.Sprintf("请求失败: %s", cleanupResp.Message)
+		}
 	}
 
 	return result
 }
 
-// sendCleanupRequest 发送清理挂单请求
-func sendCleanupRequest(node NodeConfig, req CleanupRequest) (*CleanupResponse, error) {
-	url := fmt.Sprintf("http://%s:8080/cleanup-orders", node.IP)
-
-	jsonData, err := json.Marshal(req)
-	if err != nil {
-		return nil, fmt.Errorf("序列化请求失败: %v", err)
+// executeResume 执行单个恢复任务
+func executeResume(node NodeConfig) TaskResult {
+	result := TaskResult{
+		Node:    node,
+		Success: false,
+		Message: "未知错误",
+		Retries: 0,
 	}
 
-	httpReq, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
-	if err != nil {
-		return nil, fmt.Errorf("创建请求失败: %v", err)
+	// 构建请求URL
+	url := fmt.Sprintf("http://%s/pause-status?account_id=%s", node.IP, node.ID)
+	if !strings.Contains(url, "://") {
+		url = "http://" + url
 	}
 
-	httpReq.Header.Set("Content-Type", "application/json")
+	// 最多重试3次
+	maxRetries := 3
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		result.Retries = attempt
 
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("发送请求失败: %v", err)
-	}
-	defer resp.Body.Close()
+		// 创建HTTP请求
+		req, err := http.NewRequest("DELETE", url, nil)
+		if err != nil {
+			result.Message = fmt.Sprintf("创建HTTP请求失败: %v", err)
+			continue
+		}
 
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("读取响应失败: %v", err)
-	}
+		// 发送请求
+		client := &http.Client{Timeout: 30 * time.Second}
+		resp, err := client.Do(req)
+		if err != nil {
+			result.Message = fmt.Sprintf("发送请求失败: %v", err)
+			time.Sleep(1 * time.Second) // 重试前等待
+			continue
+		}
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP错误 %d: %s", resp.StatusCode, string(body))
-	}
+		// 读取响应
+		defer resp.Body.Close()
+		respBody, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			result.Message = fmt.Sprintf("读取响应失败: %v", err)
+			continue
+		}
 
-	var cleanupResp CleanupResponse
-	if err := json.Unmarshal(body, &cleanupResp); err != nil {
-		return nil, fmt.Errorf("解析响应失败: %v", err)
-	}
+		// 解析响应
+		var resumeResp map[string]interface{}
+		if err := json.Unmarshal(respBody, &resumeResp); err != nil {
+			result.Message = fmt.Sprintf("解析响应失败: %v", err)
+			continue
+		}
 
-	return &cleanupResp, nil
-}
-
-// sendPauseRequest 发送暂停请求
-func sendPauseRequest(node NodeConfig, req PauseRequest) (*PauseResponse, error) {
-	url := fmt.Sprintf("http://%s:8080/pause-status", node.IP)
-
-	jsonData, err := json.Marshal(req)
-	if err != nil {
-		return nil, fmt.Errorf("序列化请求失败: %v", err)
-	}
-
-	httpReq, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
-	if err != nil {
-		return nil, fmt.Errorf("创建请求失败: %v", err)
-	}
-
-	httpReq.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("发送请求失败: %v", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("读取响应失败: %v", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP错误 %d: %s", resp.StatusCode, string(body))
-	}
-
-	var pauseResp PauseResponse
-	if err := json.Unmarshal(body, &pauseResp); err != nil {
-		return nil, fmt.Errorf("解析响应失败: %v", err)
-	}
-
-	return &pauseResp, nil
-}
-
-// verifyNoOrders 验证没有挂单
-func verifyNoOrders(node NodeConfig) bool {
-	url := fmt.Sprintf("http://%s:8080/account-status?account_id=%s", node.IP, node.ID)
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(url)
-	if err != nil {
-		fmt.Printf("⚠️ [%s] 验证挂单状态失败: %v\n", node.Name, err)
-		return false
-	}
-	defer resp.Body.Close()
-
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		fmt.Printf("⚠️ [%s] 读取验证响应失败: %v\n", node.Name, err)
-		return false
-	}
-
-	// 简单检查响应中是否包含挂单信息
-	// 这里可以根据实际API响应格式进行更精确的解析
-	bodyStr := string(body)
-	if strings.Contains(bodyStr, "open_orders") || strings.Contains(bodyStr, "pending_orders") {
-		// 如果响应中包含挂单相关信息，需要进一步检查
-		var statusResp map[string]interface{}
-		if err := json.Unmarshal(body, &statusResp); err == nil {
-			// 这里可以添加更详细的挂单检查逻辑
-			// 目前简化处理，认为清理成功
+		// 检查响应状态
+		success, ok := resumeResp["success"].(bool)
+		if ok && success {
+			result.Success = true
+			if message, ok := resumeResp["message"].(string); ok {
+				result.Message = message
+			} else {
+				result.Message = "账户恢复成功"
+			}
+			return result
+		} else {
+			if message, ok := resumeResp["message"].(string); ok {
+				result.Message = fmt.Sprintf("请求失败: %s", message)
+			} else {
+				result.Message = "请求失败: 未知错误"
+			}
 		}
 	}
 
-	return true // 简化处理，认为验证通过
+	return result
 }

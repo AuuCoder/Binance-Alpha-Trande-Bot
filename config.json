@@ -1,6 +1,6 @@
 {
   "server": {
-    "port": 18080,
+    "port": 28080,
     "host": "0.0.0.0",
     "mode": "master",
     "node_id": "",
@@ -12,7 +12,7 @@
     "db": 0
   },
   "grpc": {
-    "port": 9090,
+    "port": 29090,
     "max_recv_msg_size": 4194304,
     "max_send_msg_size": 4194304,
     "connection_timeout": 10,

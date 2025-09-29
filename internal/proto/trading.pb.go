@@ -2151,6 +2151,8 @@ type FlashTradeRequest struct {
 	TargetVolume   float64                `protobuf:"fixed64,6,opt,name=target_volume,json=targetVolume,proto3" json:"target_volume,omitempty"`      // 目标交易额
 	AutoLoop       bool                   `protobuf:"varint,7,opt,name=auto_loop,json=autoLoop,proto3" json:"auto_loop,omitempty"`                   // 是否自动循环
 	PricePrecision int32                  `protobuf:"varint,8,opt,name=price_precision,json=pricePrecision,proto3" json:"price_precision,omitempty"` // 价格精度位数
+	ChainId        string                 `protobuf:"bytes,9,opt,name=chain_id,json=chainId,proto3" json:"chain_id,omitempty"`                       // 区块链ID (56=BSC, CT_501=Solana)
+	PriceMode      string                 `protobuf:"bytes,10,opt,name=price_mode,json=priceMode,proto3" json:"price_mode,omitempty"`                // 价格模式 (limit/market/combined/auto)
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -2239,6 +2241,20 @@ func (x *FlashTradeRequest) GetPricePrecision() int32 {
 		return x.PricePrecision
 	}
 	return 0
+}
+
+func (x *FlashTradeRequest) GetChainId() string {
+	if x != nil {
+		return x.ChainId
+	}
+	return ""
+}
+
+func (x *FlashTradeRequest) GetPriceMode() string {
+	if x != nil {
+		return x.PriceMode
+	}
+	return ""
 }
 
 // Flash Trade 响应
@@ -3060,7 +3076,7 @@ const file_trading_proto_rawDesc = "" +
 	"\x14NodeRegisterResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12(\n" +
-	"\x10assigned_node_id\x18\x03 \x01(\tR\x0eassignedNodeId\"\x9b\x02\n" +
+	"\x10assigned_node_id\x18\x03 \x01(\tR\x0eassignedNodeId\"\xd5\x02\n" +
 	"\x11FlashTradeRequest\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x1d\n" +
 	"\n" +
@@ -3072,7 +3088,11 @@ const file_trading_proto_rawDesc = "" +
 	"base_asset\x18\x05 \x01(\tR\tbaseAsset\x12#\n" +
 	"\rtarget_volume\x18\x06 \x01(\x01R\ftargetVolume\x12\x1b\n" +
 	"\tauto_loop\x18\a \x01(\bR\bautoLoop\x12'\n" +
-	"\x0fprice_precision\x18\b \x01(\x05R\x0epricePrecision\"\xb5\x01\n" +
+	"\x0fprice_precision\x18\b \x01(\x05R\x0epricePrecision\x12\x19\n" +
+	"\bchain_id\x18\t \x01(\tR\achainId\x12\x1d\n" +
+	"\n" +
+	"price_mode\x18\n" +
+	" \x01(\tR\tpriceMode\"\xb5\x01\n" +
 	"\x12FlashTradeResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12\x17\n" +

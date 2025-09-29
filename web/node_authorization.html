@@ -1,409 +1,437 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>节点授权管理 - 币安自动卖出机器人</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
 
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            padding: 20px;
-        }
+      body {
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        min-height: 100vh;
+        padding: 20px;
+      }
 
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-            background: white;
-            border-radius: 15px;
-            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
-            overflow: hidden;
-        }
+      .container {
+        max-width: 1200px;
+        margin: 0 auto;
+        background: white;
+        border-radius: 15px;
+        box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+        overflow: hidden;
+      }
 
-        .header {
-            background: linear-gradient(135deg, #ff6b6b, #ee5a24);
-            color: white;
-            padding: 30px;
-            text-align: center;
-        }
+      .header {
+        background: linear-gradient(135deg, #ff6b6b, #ee5a24);
+        color: white;
+        padding: 30px;
+        text-align: center;
+      }
 
-        .header h1 {
-            font-size: 2.5em;
-            margin-bottom: 10px;
-            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
-        }
+      .header h1 {
+        font-size: 2.5em;
+        margin-bottom: 10px;
+        text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+      }
 
-        .header p {
-            font-size: 1.1em;
-            opacity: 0.9;
-        }
+      .header p {
+        font-size: 1.1em;
+        opacity: 0.9;
+      }
 
-        .warning-banner {
-            background: linear-gradient(135deg, #ffa726, #ff7043);
-            color: white;
-            padding: 15px;
-            text-align: center;
-            font-weight: bold;
-            border-bottom: 3px solid #e65100;
-        }
+      .warning-banner {
+        background: linear-gradient(135deg, #ffa726, #ff7043);
+        color: white;
+        padding: 15px;
+        text-align: center;
+        font-weight: bold;
+        border-bottom: 3px solid #e65100;
+      }
 
-        .content {
-            padding: 30px;
-        }
+      .content {
+        padding: 30px;
+      }
 
-        .section {
-            margin-bottom: 30px;
-        }
+      .section {
+        margin-bottom: 30px;
+      }
 
-        .section h2 {
-            color: #333;
-            margin-bottom: 20px;
-            padding-bottom: 10px;
-            border-bottom: 2px solid #eee;
-            font-size: 1.5em;
-        }
+      .section h2 {
+        color: #333;
+        margin-bottom: 20px;
+        padding-bottom: 10px;
+        border-bottom: 2px solid #eee;
+        font-size: 1.5em;
+      }
 
-        .nodes-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
-            gap: 20px;
-            margin-top: 20px;
-        }
+      .nodes-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+        gap: 20px;
+        margin-top: 20px;
+      }
 
-        .node-card {
-            background: #f8f9fa;
-            border-radius: 10px;
-            padding: 20px;
-            border: 2px solid #e9ecef;
-            transition: all 0.3s ease;
-        }
+      .node-card {
+        background: #f8f9fa;
+        border-radius: 10px;
+        padding: 20px;
+        border: 2px solid #e9ecef;
+        transition: all 0.3s ease;
+      }
 
-        .node-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
-        }
+      .node-card:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+      }
 
-        .node-card.authorized {
-            border-color: #28a745;
-            background: linear-gradient(135deg, #d4edda 0%, #ffffff 100%);
-        }
+      .node-card.authorized {
+        border-color: #28a745;
+        background: linear-gradient(135deg, #d4edda 0%, #ffffff 100%);
+      }
 
-        .node-card.unauthorized {
-            border-color: #dc3545;
-            background: linear-gradient(135deg, #f8d7da 0%, #ffffff 100%);
-        }
+      .node-card.unauthorized {
+        border-color: #dc3545;
+        background: linear-gradient(135deg, #f8d7da 0%, #ffffff 100%);
+      }
 
-        .node-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 15px;
-        }
+      .node-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 15px;
+      }
 
-        .node-name {
-            font-weight: bold;
-            font-size: 1.2em;
-            color: #333;
-        }
+      .node-name {
+        font-weight: bold;
+        font-size: 1.2em;
+        color: #333;
+      }
 
-        .node-status {
-            padding: 5px 12px;
-            border-radius: 20px;
-            font-size: 0.9em;
-            font-weight: bold;
-        }
+      .node-status {
+        padding: 5px 12px;
+        border-radius: 20px;
+        font-size: 0.9em;
+        font-weight: bold;
+      }
 
-        .status-online {
-            background: #d4edda;
-            color: #155724;
-        }
+      .status-online {
+        background: #d4edda;
+        color: #155724;
+      }
 
-        .status-offline {
-            background: #f8d7da;
-            color: #721c24;
-        }
+      .status-offline {
+        background: #f8d7da;
+        color: #721c24;
+      }
 
-        .node-info {
-            margin-bottom: 15px;
-            color: #666;
-            font-size: 0.9em;
-        }
+      .node-info {
+        margin-bottom: 15px;
+        color: #666;
+        font-size: 0.9em;
+      }
 
-        .node-actions {
-            display: flex;
-            gap: 10px;
-        }
+      .node-actions {
+        display: flex;
+        gap: 10px;
+      }
 
-        .btn {
-            padding: 10px 20px;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-            font-weight: bold;
-            transition: all 0.3s ease;
-            text-decoration: none;
-            display: inline-block;
-            text-align: center;
-        }
+      .btn {
+        padding: 10px 20px;
+        border: none;
+        border-radius: 5px;
+        cursor: pointer;
+        font-weight: bold;
+        transition: all 0.3s ease;
+        text-decoration: none;
+        display: inline-block;
+        text-align: center;
+      }
 
-        .btn-authorize {
-            background: linear-gradient(135deg, #28a745, #20c997);
-            color: white;
-        }
+      .btn-authorize {
+        background: linear-gradient(135deg, #28a745, #20c997);
+        color: white;
+      }
 
-        .btn-authorize:hover {
-            background: linear-gradient(135deg, #20c997, #17a2b8);
-            transform: translateY(-2px);
-        }
+      .btn-authorize:hover {
+        background: linear-gradient(135deg, #20c997, #17a2b8);
+        transform: translateY(-2px);
+      }
 
-        .btn-revoke {
-            background: linear-gradient(135deg, #dc3545, #c82333);
-            color: white;
-        }
+      .btn-revoke {
+        background: linear-gradient(135deg, #dc3545, #c82333);
+        color: white;
+      }
 
-        .btn-revoke:hover {
-            background: linear-gradient(135deg, #c82333, #bd2130);
-            transform: translateY(-2px);
-        }
+      .btn-revoke:hover {
+        background: linear-gradient(135deg, #c82333, #bd2130);
+        transform: translateY(-2px);
+      }
 
-        .btn:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-            transform: none !important;
-        }
+      .btn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+        transform: none !important;
+      }
 
-        .loading {
-            text-align: center;
-            padding: 40px;
-            color: #666;
-        }
+      .loading {
+        text-align: center;
+        padding: 40px;
+        color: #666;
+      }
 
-        .no-nodes {
-            text-align: center;
-            padding: 40px;
-            color: #666;
-            font-style: italic;
-        }
+      .no-nodes {
+        text-align: center;
+        padding: 40px;
+        color: #666;
+        font-style: italic;
+      }
 
-        .refresh-btn {
-            background: linear-gradient(135deg, #007bff, #0056b3);
-            color: white;
-            margin-bottom: 20px;
-        }
+      .refresh-btn {
+        background: linear-gradient(135deg, #007bff, #0056b3);
+        color: white;
+        margin-bottom: 20px;
+      }
 
-        .refresh-btn:hover {
-            background: linear-gradient(135deg, #0056b3, #004085);
-        }
+      .refresh-btn:hover {
+        background: linear-gradient(135deg, #0056b3, #004085);
+      }
 
-        .stats {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 20px;
-            margin-bottom: 30px;
-        }
+      .stats {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 20px;
+        margin-bottom: 30px;
+      }
 
-        .stat-card {
-            background: linear-gradient(135deg, #f8f9fa 0%, #ffffff 100%);
-            padding: 20px;
-            border-radius: 10px;
-            text-align: center;
-            border: 2px solid #e9ecef;
-        }
+      .stat-card {
+        background: linear-gradient(135deg, #f8f9fa 0%, #ffffff 100%);
+        padding: 20px;
+        border-radius: 10px;
+        text-align: center;
+        border: 2px solid #e9ecef;
+      }
 
-        .stat-number {
-            font-size: 2em;
-            font-weight: bold;
-            color: #333;
-        }
+      .stat-number {
+        font-size: 2em;
+        font-weight: bold;
+        color: #333;
+      }
 
-        .stat-label {
-            color: #666;
-            margin-top: 5px;
-        }
+      .stat-label {
+        color: #666;
+        margin-top: 5px;
+      }
 
-        .notification {
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            padding: 15px 20px;
-            border-radius: 5px;
-            color: white;
-            font-weight: bold;
-            z-index: 10000;
-            max-width: 400px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-            animation: slideInRight 0.3s ease;
-        }
+      .notification {
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        padding: 15px 20px;
+        border-radius: 5px;
+        color: white;
+        font-weight: bold;
+        z-index: 10000;
+        max-width: 400px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        animation: slideInRight 0.3s ease;
+      }
 
-        .notification.success {
-            background: linear-gradient(135deg, #28a745, #20c997);
-        }
+      .notification.success {
+        background: linear-gradient(135deg, #28a745, #20c997);
+      }
 
-        .notification.error {
-            background: linear-gradient(135deg, #dc3545, #e74c3c);
-        }
+      .notification.error {
+        background: linear-gradient(135deg, #dc3545, #e74c3c);
+      }
 
-        @keyframes slideInRight {
-            from { transform: translateX(100%); opacity: 0; }
-            to { transform: translateX(0); opacity: 1; }
+      @keyframes slideInRight {
+        from {
+          transform: translateX(100%);
+          opacity: 0;
         }
+        to {
+          transform: translateX(0);
+          opacity: 1;
+        }
+      }
 
-        @keyframes slideOutRight {
-            from { transform: translateX(0); opacity: 1; }
-            to { transform: translateX(100%); opacity: 0; }
+      @keyframes slideOutRight {
+        from {
+          transform: translateX(0);
+          opacity: 1;
         }
+        to {
+          transform: translateX(100%);
+          opacity: 0;
+        }
+      }
     </style>
-</head>
-<body>
+  </head>
+  <body>
     <div class="container">
-        <div class="header">
-            <h1>🔐 节点授权管理</h1>
-            <p>管理被控端节点的授权状态</p>
-        </div>
+      <div class="header">
+        <h1>🔐 节点授权管理</h1>
+        <p>管理被控端节点的授权状态</p>
+      </div>
 
-        <div class="warning-banner">
-            ⚠️ 警告：此页面用于管理节点授权，请谨慎操作！只有已授权的节点才能接收账号数据。
-        </div>
+      <div class="warning-banner">
+        ⚠️
+        警告：此页面用于管理节点授权，请谨慎操作！只有已授权的节点才能接收账号数据。
+      </div>
 
-        <div class="content">
-            <div class="section">
-                <h2>📊 授权统计</h2>
-                <div class="stats" id="statsContainer">
-                    <div class="stat-card">
-                        <div class="stat-number" id="totalNodes">-</div>
-                        <div class="stat-label">总节点数</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-number" id="authorizedNodes">-</div>
-                        <div class="stat-label">已授权节点</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-number" id="onlineNodes">-</div>
-                        <div class="stat-label">在线节点</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-number" id="unauthorizedNodes">-</div>
-                        <div class="stat-label">未授权节点</div>
-                    </div>
-                </div>
+      <div class="content">
+        <div class="section">
+          <h2>📊 授权统计</h2>
+          <div class="stats" id="statsContainer">
+            <div class="stat-card">
+              <div class="stat-number" id="totalNodes">-</div>
+              <div class="stat-label">总节点数</div>
             </div>
-
-            <div class="section">
-                <h2>🖥️ 节点列表</h2>
-                <button class="btn refresh-btn" onclick="refreshNodes()">🔄 刷新节点列表</button>
-                
-                <div id="loadingContainer" class="loading">
-                    <p>🔄 正在加载节点信息...</p>
-                </div>
-
-                <div id="nodesContainer" class="nodes-grid" style="display: none;">
-                    <!-- 节点卡片将在这里动态生成 -->
-                </div>
-
-                <div id="noNodesContainer" class="no-nodes" style="display: none;">
-                    <p>📭 暂无节点信息</p>
-                </div>
+            <div class="stat-card">
+              <div class="stat-number" id="authorizedNodes">-</div>
+              <div class="stat-label">已授权节点</div>
             </div>
+            <div class="stat-card">
+              <div class="stat-number" id="onlineNodes">-</div>
+              <div class="stat-label">在线节点</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-number" id="unauthorizedNodes">-</div>
+              <div class="stat-label">未授权节点</div>
+            </div>
+          </div>
         </div>
+
+        <div class="section">
+          <h2>🖥️ 节点列表</h2>
+          <button class="btn refresh-btn" onclick="refreshNodes()">
+            🔄 刷新节点列表
+          </button>
+
+          <div id="loadingContainer" class="loading">
+            <p>🔄 正在加载节点信息...</p>
+          </div>
+
+          <div id="nodesContainer" class="nodes-grid" style="display: none">
+            <!-- 节点卡片将在这里动态生成 -->
+          </div>
+
+          <div id="noNodesContainer" class="no-nodes" style="display: none">
+            <p>📭 暂无节点信息</p>
+          </div>
+        </div>
+      </div>
     </div>
 
     <script>
-        let allNodes = [];
-        let authorizedNodesList = [];
+      let allNodes = [];
+      let authorizedNodesList = [];
 
-        // 页面加载时初始化
-        document.addEventListener('DOMContentLoaded', function() {
-            refreshNodes();
-            
-            // 设置定时刷新
-            setInterval(refreshNodes, 30000); // 每30秒刷新一次
-        });
+      // 页面加载时初始化
+      document.addEventListener("DOMContentLoaded", function () {
+        refreshNodes();
 
-        // 刷新节点列表
-        async function refreshNodes() {
-            try {
-                // 获取所有节点
-                const nodesResponse = await fetch('/api/v1/nodes');
-                const nodesData = await nodesResponse.json();
+        // 设置定时刷新
+        setInterval(refreshNodes, 30000); // 每30秒刷新一次
+      });
 
-                // 获取已授权节点
-                const authResponse = await fetch('/api/v1/nodes/authorized');
-                const authData = await authResponse.json();
+      // 刷新节点列表
+      async function refreshNodes() {
+        try {
+          // 获取所有节点
+          const nodesResponse = await fetch("/api/v1/nodes");
+          const nodesData = await nodesResponse.json();
 
-                if (nodesData.success && authData.success) {
-                    allNodes = Object.values(nodesData.nodes || {});
-                    authorizedNodesList = authData.nodes || [];
+          // 获取已授权节点
+          const authResponse = await fetch("/api/v1/nodes/authorized");
+          const authData = await authResponse.json();
 
-                    console.log('所有节点:', allNodes);
-                    console.log('已授权节点:', authorizedNodesList);
+          if (nodesData.success && authData.success) {
+            allNodes = Object.values(nodesData.nodes || {});
+            authorizedNodesList = authData.nodes || [];
 
-                    updateStats();
-                    displayNodes();
-                } else {
-                    console.error('API失败:', nodesData, authData);
-                    showNotification('获取节点信息失败', 'error');
-                }
-            } catch (error) {
-                console.error('刷新节点失败:', error);
-                showNotification('网络错误: ' + error.message, 'error');
-            }
+            console.log("所有节点:", allNodes);
+            console.log("已授权节点:", authorizedNodesList);
+
+            updateStats();
+            displayNodes();
+          } else {
+            console.error("API失败:", nodesData, authData);
+            showNotification("获取节点信息失败", "error");
+          }
+        } catch (error) {
+          console.error("刷新节点失败:", error);
+          showNotification("网络错误: " + error.message, "error");
+        }
+      }
+
+      // 更新统计信息
+      function updateStats() {
+        const totalNodes = allNodes.length;
+        const authorizedNodes = authorizedNodesList.length;
+        const onlineNodes = allNodes.filter(
+          (node) => node.status === "online"
+        ).length;
+        const unauthorizedNodes = totalNodes - authorizedNodes;
+
+        document.getElementById("totalNodes").textContent = totalNodes;
+        document.getElementById("authorizedNodes").textContent =
+          authorizedNodes;
+        document.getElementById("onlineNodes").textContent = onlineNodes;
+        document.getElementById("unauthorizedNodes").textContent =
+          unauthorizedNodes;
+      }
+
+      // 显示节点列表
+      function displayNodes() {
+        const loadingContainer = document.getElementById("loadingContainer");
+        const nodesContainer = document.getElementById("nodesContainer");
+        const noNodesContainer = document.getElementById("noNodesContainer");
+
+        loadingContainer.style.display = "none";
+
+        if (allNodes.length === 0) {
+          nodesContainer.style.display = "none";
+          noNodesContainer.style.display = "block";
+          return;
         }
 
-        // 更新统计信息
-        function updateStats() {
-            const totalNodes = allNodes.length;
-            const authorizedNodes = authorizedNodesList.length;
-            const onlineNodes = allNodes.filter(node => node.status === 'online').length;
-            const unauthorizedNodes = totalNodes - authorizedNodes;
+        noNodesContainer.style.display = "none";
+        nodesContainer.style.display = "grid";
 
-            document.getElementById('totalNodes').textContent = totalNodes;
-            document.getElementById('authorizedNodes').textContent = authorizedNodes;
-            document.getElementById('onlineNodes').textContent = onlineNodes;
-            document.getElementById('unauthorizedNodes').textContent = unauthorizedNodes;
-        }
+        // 创建授权节点ID集合，便于快速查找
+        const authorizedNodeIds = new Set(
+          authorizedNodesList.map((node) => node.node_id)
+        );
 
-        // 显示节点列表
-        function displayNodes() {
-            const loadingContainer = document.getElementById('loadingContainer');
-            const nodesContainer = document.getElementById('nodesContainer');
-            const noNodesContainer = document.getElementById('noNodesContainer');
+        let html = "";
+        allNodes.forEach((node) => {
+          const isAuthorized = authorizedNodeIds.has(node.node_id);
+          const isOnline = node.status === "online";
+          const lastHeartbeat = node.last_heartbeat
+            ? new Date(node.last_heartbeat).toLocaleString()
+            : "从未";
 
-            loadingContainer.style.display = 'none';
+          console.log("节点数据:", node); // 调试信息
 
-            if (allNodes.length === 0) {
-                nodesContainer.style.display = 'none';
-                noNodesContainer.style.display = 'block';
-                return;
-            }
-
-            noNodesContainer.style.display = 'none';
-            nodesContainer.style.display = 'grid';
-
-            // 创建授权节点ID集合，便于快速查找
-            const authorizedNodeIds = new Set(authorizedNodesList.map(node => node.node_id));
-
-            let html = '';
-            allNodes.forEach(node => {
-                const isAuthorized = authorizedNodeIds.has(node.node_id);
-                const isOnline = node.status === 'online';
-                const lastHeartbeat = node.last_heartbeat ?
-                    new Date(node.last_heartbeat).toLocaleString() : '从未';
-
-                console.log('节点数据:', node); // 调试信息
-
-                html += `
-                    <div class="node-card ${isAuthorized ? 'authorized' : 'unauthorized'}">
+          html += `
+                    <div class="node-card ${
+                      isAuthorized ? "authorized" : "unauthorized"
+                    }">
                         <div class="node-header">
-                            <div class="node-name">${node.friendly_name || node.node_id}</div>
-                            <div class="node-status ${isOnline ? 'status-online' : 'status-offline'}">
-                                ${isOnline ? '🟢 在线' : '🔴 离线'}
+                            <div class="node-name">${
+                              node.friendly_name || node.node_id
+                            }</div>
+                            <div class="node-status ${
+                              isOnline ? "status-online" : "status-offline"
+                            }">
+                                ${isOnline ? "🟢 在线" : "🔴 离线"}
                             </div>
                         </div>
 
@@ -411,101 +439,111 @@
                             <div><strong>节点ID:</strong> ${node.node_id}</div>
                             <div><strong>地址:</strong> ${node.address}</div>
                             <div><strong>最后心跳:</strong> ${lastHeartbeat}</div>
-                            <div><strong>授权状态:</strong> ${isAuthorized ? '✅ 已授权' : '❌ 未授权'}</div>
+                            <div><strong>授权状态:</strong> ${
+                              isAuthorized ? "✅ 已授权" : "❌ 未授权"
+                            }</div>
                         </div>
 
                         <div class="node-actions">
-                            ${isAuthorized ?
-                                `<button class="btn btn-revoke" onclick="revokeAuthorization('${node.node_id}')">
+                            ${
+                              isAuthorized
+                                ? `<button class="btn btn-revoke" onclick="revokeAuthorization('${node.node_id}')">
                                     🚫 撤销授权
-                                </button>` :
-                                `<button class="btn btn-authorize" onclick="authorizeNode('${node.node_id}')">
+                                </button>`
+                                : `<button class="btn btn-authorize" onclick="authorizeNode('${node.node_id}')">
                                     ✅ 授权节点
                                 </button>`
                             }
                         </div>
                     </div>
                 `;
-            });
+        });
 
-            nodesContainer.innerHTML = html;
+        nodesContainer.innerHTML = html;
+      }
+
+      // 授权节点
+      async function authorizeNode(nodeId) {
+        if (
+          !confirm(
+            `确定要授权节点 "${nodeId}" 吗？\n\n授权后该节点将能够接收账号数据。`
+          )
+        ) {
+          return;
         }
 
-        // 授权节点
-        async function authorizeNode(nodeId) {
-            if (!confirm(`确定要授权节点 "${nodeId}" 吗？\n\n授权后该节点将能够接收账号数据。`)) {
-                return;
-            }
+        try {
+          const response = await fetch(`/api/v1/nodes/${nodeId}/authorize`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+          });
 
-            try {
-                const response = await fetch(`/api/v1/nodes/${nodeId}/authorize`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    }
-                });
+          const result = await response.json();
 
-                const result = await response.json();
+          if (result.success) {
+            showNotification(`✅ 节点 ${nodeId} 授权成功`, "success");
+            refreshNodes(); // 刷新列表
+          } else {
+            showNotification(`❌ 授权失败: ${result.message}`, "error");
+          }
+        } catch (error) {
+          console.error("授权节点失败:", error);
+          showNotification(`❌ 网络错误: ${error.message}`, "error");
+        }
+      }
 
-                if (result.success) {
-                    showNotification(`✅ 节点 ${nodeId} 授权成功`, 'success');
-                    refreshNodes(); // 刷新列表
-                } else {
-                    showNotification(`❌ 授权失败: ${result.message}`, 'error');
-                }
-            } catch (error) {
-                console.error('授权节点失败:', error);
-                showNotification(`❌ 网络错误: ${error.message}`, 'error');
-            }
+      // 撤销节点授权
+      async function revokeAuthorization(nodeId) {
+        if (
+          !confirm(
+            `确定要撤销节点 "${nodeId}" 的授权吗？\n\n撤销后该节点将无法接收新的账号数据。`
+          )
+        ) {
+          return;
         }
 
-        // 撤销节点授权
-        async function revokeAuthorization(nodeId) {
-            if (!confirm(`确定要撤销节点 "${nodeId}" 的授权吗？\n\n撤销后该节点将无法接收新的账号数据。`)) {
-                return;
-            }
+        try {
+          const response = await fetch(`/api/v1/nodes/${nodeId}/authorize`, {
+            method: "DELETE",
+            headers: {
+              "Content-Type": "application/json",
+            },
+          });
 
-            try {
-                const response = await fetch(`/api/v1/nodes/${nodeId}/authorize`, {
-                    method: 'DELETE',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    }
-                });
+          const result = await response.json();
 
-                const result = await response.json();
-
-                if (result.success) {
-                    showNotification(`⚠️ 节点 ${nodeId} 授权已撤销`, 'success');
-                    refreshNodes(); // 刷新列表
-                } else {
-                    showNotification(`❌ 撤销失败: ${result.message}`, 'error');
-                }
-            } catch (error) {
-                console.error('撤销授权失败:', error);
-                showNotification(`❌ 网络错误: ${error.message}`, 'error');
-            }
+          if (result.success) {
+            showNotification(`⚠️ 节点 ${nodeId} 授权已撤销`, "success");
+            refreshNodes(); // 刷新列表
+          } else {
+            showNotification(`❌ 撤销失败: ${result.message}`, "error");
+          }
+        } catch (error) {
+          console.error("撤销授权失败:", error);
+          showNotification(`❌ 网络错误: ${error.message}`, "error");
         }
+      }
 
-        // 显示通知
-        function showNotification(message, type = 'info') {
-            const notification = document.createElement('div');
-            notification.className = `notification ${type}`;
-            notification.textContent = message;
+      // 显示通知
+      function showNotification(message, type = "info") {
+        const notification = document.createElement("div");
+        notification.className = `notification ${type}`;
+        notification.textContent = message;
 
-            document.body.appendChild(notification);
+        document.body.appendChild(notification);
 
-            // 3秒后自动移除
-            setTimeout(() => {
-                notification.style.animation = 'slideOutRight 0.3s ease';
-                setTimeout(() => {
-                    if (notification.parentNode) {
-                        notification.parentNode.removeChild(notification);
-                    }
-                }, 300);
-            }, 3000);
-        }
-
+        // 3秒后自动移除
+        setTimeout(() => {
+          notification.style.animation = "slideOutRight 0.3s ease";
+          setTimeout(() => {
+            if (notification.parentNode) {
+              notification.parentNode.removeChild(notification);
+            }
+          }, 300);
+        }, 3000);
+      }
     </script>
-</body>
+  </body>
 </html>

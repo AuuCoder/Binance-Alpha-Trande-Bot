@@ -1,7 +1,13 @@
 package slave
 
 import (
+	"alpha-autosell-bot/internal/account"
+	"alpha-autosell-bot/internal/auth"
 	"alpha-autosell-bot/internal/binance"
+	"alpha-autosell-bot/internal/common"
+	"alpha-autosell-bot/internal/proto"
+	"alpha-autosell-bot/pkg/redis"
+	"alpha-autosell-bot/pkg/utils"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -11,19 +17,15 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"go.mongodb.org/mongo-driver/bson"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
-
-	"alpha-autosell-bot/internal/account"
-	"alpha-autosell-bot/internal/common"
-	"alpha-autosell-bot/internal/proto"
-	"alpha-autosell-bot/pkg/redis"
-	"alpha-autosell-bot/pkg/utils"
 )
 
 // AccountInfo Flash Trade 使用的账号信息结构
@@ -48,11 +50,13 @@ type Command struct {
 
 // Client 被控端客户端
 type Client struct {
-	config         *common.Config
-	grpcConn       *grpc.ClientConn
-	grpcClient     proto.TradingServiceClient
-	redisClient    *redis.Client
-	accountManager *AccountManager
+	config          *common.Config
+	grpcConn        *grpc.ClientConn
+	grpcClient      proto.TradingServiceClient
+	redisClient     *redis.Client
+	mongoAuthManager *auth.MongoAuthManager // 添加MongoDB授权管理器
+	useMongoAuth    bool                    // 是否使用MongoDB授权
+	accountManager  *AccountManager
 
 	// 状态管理
 	nodeID    string
@@ -67,9 +71,13 @@ type Client struct {
 
 // NewClient 创建新的被控端客户端
 func NewClient(config *common.Config) (*Client, error) {
-	// 生成节点ID
-	nodeID := utils.GenerateNodeID("slave")
-	log.Printf("🆔 生成节点ID: %s", nodeID)
+	// 生成节点ID（如果未指定）
+	nodeID := config.Server.NodeID
+	if nodeID == "" {
+		// 生成随机节点ID
+		nodeID = utils.GenerateNodeID("slave")
+		log.Printf("🆔 生成节点ID: %s", nodeID)
+	}
 
 	// 创建Redis客户端
 	redisClient := redis.NewClient(redis.Config{
@@ -77,24 +85,37 @@ func NewClient(config *common.Config) (*Client, error) {
 		Password: config.Redis.Password,
 		DB:       config.Redis.DB,
 	})
-	if redisClient == nil {
-		log.Printf("⚠️ Redis连接失败，将在后台重试")
-		// 不返回错误，允许程序继续运行
-	} else {
-		// Redis客户端已配置
-	}
 
 	// 创建账号管理器
 	accountManager := NewAccountManager(nodeID, "data/accounts.json")
+	
+	// 创建授权管理器（如果配置了数据库）
+	var mongoAuthManager *auth.MongoAuthManager
+	useMongoAuth := false
+	
+	// 检查是否配置了数据库
+	if config.MongoDB != nil && config.MongoDB.Enabled && config.MongoDB.URI != "" {
+		var err error
+		mongoAuthManager, err = auth.NewMongoAuthManager()
+		if err != nil {
+			// 静默失败，不输出日志
+		} else {
+			useMongoAuth = true
+		}
+	}
 
 	return &Client{
-		config:         config,
-		redisClient:    redisClient,
-		accountManager: accountManager,
-		nodeID:         nodeID,
-		status:         "offline",
-		startTime:      time.Now(),
-		stopChan:       make(chan struct{}),
+		config:          config,
+		redisClient:     redisClient,
+		mongoAuthManager: mongoAuthManager,
+		useMongoAuth:    useMongoAuth,
+		accountManager:  accountManager,
+		nodeID:          nodeID,
+		status:          "offline",
+		startTime:       time.Now(),
+		stopChan:        make(chan struct{}),
+		isRunning:       false,
+		runMutex:        sync.RWMutex{},
 	}, nil
 }
 
@@ -103,17 +124,28 @@ func (c *Client) Start() error {
 	c.runMutex.Lock()
 	if c.isRunning {
 		c.runMutex.Unlock()
-		return fmt.Errorf("客户端已在运行")
+		return fmt.Errorf("服务已在运行")
 	}
 	c.isRunning = true
 	c.runMutex.Unlock()
 
-	log.Printf("🚀 启动被控端客户端 - NodeID: %s", c.nodeID)
+	log.Printf("🚀 启动服务 - 节点ID: %s", c.nodeID)
 
 	// 连接到主控端
 	if err := c.connectToMaster(); err != nil {
-		log.Printf("⚠️ 连接主控端失败: %v", err)
+		log.Printf("⚠️ 连接服务器失败: %v", err)
 		// 不返回错误，允许程序继续运行
+	}
+	
+	// 检查授权状态 - 无痕检查
+	if !c.isAuthorized() {
+		// 等待5秒
+		time.Sleep(5 * time.Second)
+		// 停止客户端
+		c.Stop()
+		// 退出程序
+		os.Exit(1)
+		return fmt.Errorf("节点未授权")
 	}
 
 	// 启动Redis命令处理
@@ -132,7 +164,7 @@ func (c *Client) Start() error {
 	go c.startAccountSync()
 
 	c.status = "online"
-	log.Printf("✅ 被控端客户端启动成功")
+	log.Printf("✅ 服务启动成功")
 
 	return nil
 }
@@ -140,21 +172,20 @@ func (c *Client) Start() error {
 // Stop 停止被控端客户端
 func (c *Client) Stop() {
 	c.runMutex.Lock()
+	defer c.runMutex.Unlock()
+
 	if !c.isRunning {
-		c.runMutex.Unlock()
 		return
 	}
-	c.isRunning = false
-	c.runMutex.Unlock()
-
-	log.Printf("🛑 正在停止被控端客户端...")
 
 	// 发送停止信号
 	close(c.stopChan)
+	c.isRunning = false
 
 	// 关闭gRPC连接
 	if c.grpcConn != nil {
 		c.grpcConn.Close()
+		c.grpcConn = nil
 	}
 
 	// 关闭Redis连接
@@ -162,8 +193,13 @@ func (c *Client) Stop() {
 		c.redisClient.Close()
 	}
 
-	c.status = "offline"
-	log.Printf("✅ 被控端客户端已停止")
+	// 关闭MongoDB连接
+	if c.mongoAuthManager != nil {
+		c.mongoAuthManager.Close()
+		log.Println("MongoDB授权管理器已关闭")
+	}
+
+	log.Println("被控端客户端已停止")
 }
 
 // connectToMaster 连接到主控端
@@ -172,11 +208,12 @@ func (c *Client) connectToMaster() error {
 	if masterAddr == "" {
 		masterAddr = "localhost:29090" // 默认主控端地址
 	}
-	log.Printf("🔗 连接主控端: %s", masterAddr)
+	log.Printf("🔗 连接主控端...")
 
-	// 创建gRPC连接
+	// 创建gRPC连接，不使用阻塞模式
 	conn, err := grpc.Dial(masterAddr,
 		grpc.WithInsecure(),
+		grpc.WithTimeout(30*time.Second), // 增加连接超时时间
 		grpc.WithKeepaliveParams(keepalive.ClientParameters{
 			Time:                60 * time.Second, // 60秒发送一次 keepalive
 			Timeout:             10 * time.Second, // 10秒超时
@@ -203,8 +240,7 @@ func (c *Client) connectToMaster() error {
 func (c *Client) registerNode() error {
 	// 首先尝试 gRPC 注册
 	if err := c.registerNodeGRPC(); err != nil {
-		log.Printf("⚠️ gRPC 注册失败: %v", err)
-		log.Printf("🔄 尝试 HTTP API 注册...")
+		log.Printf("⚠️ gRPC 注册失败，尝试 HTTP API 注册...")
 
 		// 如果 gRPC 失败，尝试 HTTP API 注册
 		if err := c.registerNodeHTTP(); err != nil {
@@ -223,7 +259,7 @@ func (c *Client) registerNode() error {
 
 // registerNodeGRPC 通过 gRPC 注册节点
 func (c *Client) registerNodeGRPC() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second) // 增加超时时间到30秒
 	defer cancel()
 
 	// 获取用户名
@@ -247,7 +283,22 @@ func (c *Client) registerNodeGRPC() error {
 		Timestamp: time.Now().Unix(),
 	}
 
-	resp, err := c.grpcClient.RegisterNode(ctx, req)
+	// 添加重试逻辑
+	var err error
+	var resp *proto.NodeRegisterResponse
+	
+	for retries := 0; retries < 3; retries++ {
+		if retries > 0 {
+			log.Printf("🔄 重试注册节点...")
+			time.Sleep(time.Duration(retries) * 2 * time.Second)
+		}
+		
+		resp, err = c.grpcClient.RegisterNode(ctx, req)
+		if err == nil {
+			break
+		}
+	}
+	
 	if err != nil {
 		return err
 	}
@@ -261,9 +312,11 @@ func (c *Client) registerNodeGRPC() error {
 
 // registerNodeHTTP 通过 HTTP API 注册节点
 func (c *Client) registerNodeHTTP() error {
-	// 构建主控端 HTTP 地址
+	// 构建主控端HTTP地址
 	masterHTTPAddr := c.getMasterHTTPAddr()
-	log.Printf("🌐 主控端HTTP地址: %s (从gRPC地址 %s 转换)", masterHTTPAddr, c.config.Server.MasterAddr)
+	if masterHTTPAddr == "" {
+		return fmt.Errorf("无法确定主控端HTTP地址")
+	}
 
 	// 获取用户名
 	username := os.Getenv("USERNAME")
@@ -274,27 +327,70 @@ func (c *Client) registerNodeHTTP() error {
 		username = "unknown"
 	}
 
-	// 准备注册数据
-	registerData := map[string]interface{}{
-		"node_id":       c.nodeID,
-		"address":       c.getLocalIPAddress(),
-		"friendly_name": "", // 让主控端自动生成
+	// 构建注册请求
+	reqData := map[string]interface{}{
+		"node_id":   c.nodeID,
+		"node_type": "slave",
+		"http_addr": c.getLocalIPAddress(),
 		"metadata": map[string]string{
-			"type":     "slave",
-			"version":  "1.0.0",
-			"username": username, // 添加用户名
+			"version":    "1.0.0",
+			"start_time": c.startTime.Format(time.RFC3339),
+			"username":   username,
 		},
+		"timestamp": time.Now().Unix(),
 	}
 
-	// 发送 HTTP 请求
-	return c.sendHTTPRegisterRequest(masterHTTPAddr, registerData)
+	jsonData, err := json.Marshal(reqData)
+	if err != nil {
+		return fmt.Errorf("序列化请求数据失败: %v", err)
+	}
+
+	// 发送注册请求
+	url := fmt.Sprintf("%s/api/v1/nodes/register", masterHTTPAddr)
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("创建HTTP请求失败: %v", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("发送HTTP请求失败: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("HTTP API返回错误状态: %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("读取响应失败: %v", err)
+	}
+
+	var response struct {
+		Success bool   `json:"success"`
+		Message string `json:"message"`
+	}
+
+	if err := json.Unmarshal(body, &response); err != nil {
+		return fmt.Errorf("解析响应失败: %v", err)
+	}
+
+	if !response.Success {
+		return fmt.Errorf("HTTP API注册失败: %s", response.Message)
+	}
+
+	return nil
 }
 
 // getMasterHTTPAddr 获取主控端 HTTP 地址
 func (c *Client) getMasterHTTPAddr() string {
 	masterAddr := c.config.Server.MasterAddr
 	if masterAddr == "" {
-		masterAddr = "localhost:29090"
+		masterAddr = "localhost:28080"
 	}
 
 	// 从 master_addr 中提取主机地址
@@ -536,6 +632,12 @@ func (c *Client) GetStatus() string {
 
 // handleAccountCommand 处理账号管理命令
 func (c *Client) handleAccountCommand(payload string) {
+	// 首先检查节点是否已授权
+	if !c.isAuthorized() {
+		log.Printf("⚠️ 节点未授权，拒绝处理账号管理命令")
+		return
+	}
+
 	var command Command
 	if err := json.Unmarshal([]byte(payload), &command); err != nil {
 		log.Printf("❌ 解析账号管理命令失败: %v", err)
@@ -742,13 +844,19 @@ func getString(m map[string]interface{}, key string) string {
 }
 
 // handleFlashCommand 处理Flash Trade命令
-func (c *Client) handleFlashCommand(message string) {
-	log.Printf("🔧 [调试] 收到Flash命令原始消息: %s", message)
+func (c *Client) handleFlashCommand(payload string) {
+	// 首先检查节点是否已授权
+	if !c.isAuthorized() {
+		log.Printf("⚠️ 节点未授权，拒绝处理Flash Trade命令")
+		return
+	}
+
+	log.Printf("🔧 [调试] 收到Flash命令原始消息: %s", payload)
 
 	var command binance.Command
-	if err := json.Unmarshal([]byte(message), &command); err != nil {
+	if err := json.Unmarshal([]byte(payload), &command); err != nil {
 		log.Printf("❌ Flash命令解析失败: %v", err)
-		log.Printf("   原始消息: %s", message)
+		log.Printf("   原始消息: %s", payload)
 		return
 	}
 
@@ -767,13 +875,13 @@ func (c *Client) handleFlashCommand(message string) {
 	log.Printf("📨 收到Flash命令: %s (类型: %s, 目标节点: %s)", command.CommandID, command.CommandType, command.TargetNode)
 
 	// 将 Payload 转换为 map[string]interface{}
-	payload, ok := command.Payload.(map[string]interface{})
+	payloadMap, ok := command.Payload.(map[string]interface{})
 	if !ok {
 		log.Printf("❌ Flash命令Payload格式错误")
 		return
 	}
 
-	action, ok := payload["action"].(string)
+	action, ok := payloadMap["action"].(string)
 	if !ok {
 		log.Printf("❌ Flash命令缺少action字段")
 		return
@@ -812,6 +920,8 @@ func (c *Client) handleFlashStart(command *binance.Command) {
 	targetVolume, _ := payload["target_volume"].(float64)
 	autoLoop, _ := payload["auto_loop"].(bool)
 	pricePrecision, _ := payload["price_precision"].(float64)
+	chainID, _ := payload["chain_id"].(string)       // 🔧 新增：解析链ID
+	priceMode, _ := payload["price_mode"].(string)   // 🔧 新增：解析价格模式
 
 	// 获取目标账号列表
 	targetAccountsInterface, _ := payload["target_accounts"].([]interface{})
@@ -829,6 +939,8 @@ func (c *Client) handleFlashStart(command *binance.Command) {
 	log.Printf("   目标交易量: %.2f", targetVolume)
 	log.Printf("   自动循环: %v", autoLoop)
 	log.Printf("   价格精度: %.0f", pricePrecision)
+	log.Printf("   链ID: %s", chainID)           // 🔧 新增：显示链ID
+	log.Printf("   价格模式: %s", priceMode)      // 🔧 新增：显示价格模式
 	log.Printf("   目标账号: %v", targetAccounts)
 
 	// 🔧 新增：立即发送接收确认
@@ -929,7 +1041,7 @@ func (c *Client) handleFlashStart(command *binance.Command) {
 		}
 
 		// 调用 flash_trade.go 的 /trade 接口
-		success := c.callFlashTradeAPI(account.AccountID, tokenAddress, usdtAmount, baseAsset, targetVolume, autoLoop, int(pricePrecision), account.Csrftoken, account.Cookie)
+		success := c.callFlashTradeAPIWithChain(account.AccountID, tokenAddress, usdtAmount, baseAsset, targetVolume, autoLoop, int(pricePrecision), chainID, priceMode, account.Csrftoken, account.Cookie)
 		if success {
 			log.Printf("✅ [%s] Flash Trade 调用成功", account.AccountID)
 			successCount++
@@ -1147,9 +1259,15 @@ func (c *Client) handleFlashResume(command *binance.Command) {
 }
 
 // handleFlashStatsRequest 处理Flash Trade统计请求
-func (c *Client) handleFlashStatsRequest(message string) {
+func (c *Client) handleFlashStatsRequest(payload string) {
+	// 首先检查节点是否已授权
+	if !c.isAuthorized() {
+		log.Printf("⚠️ 节点未授权，拒绝处理Flash Trade统计请求")
+		return
+	}
+
 	var command binance.Command
-	if err := json.Unmarshal([]byte(message), &command); err != nil {
+	if err := json.Unmarshal([]byte(payload), &command); err != nil {
 		log.Printf("❌ Flash统计请求解析失败: %v", err)
 		return
 	}
@@ -1159,29 +1277,29 @@ func (c *Client) handleFlashStatsRequest(message string) {
 		return
 	}
 
-	log.Printf("📊 收到Flash Trade统计请求")
+	log.Printf("📊 收到Flash统计请求: %s", command.CommandID)
 
-	// 获取统计数据（从 flash_trade.go 接口）
-	stats := c.getFlashTradeStats()
-
-	// 构建响应数据
-	responseData := map[string]interface{}{
-		"node_id": c.nodeID,
-		"stats":   stats,
-	}
+	// 获取Flash Trade统计数据
+	responseData := c.getFlashTradeStats()
 
 	// 发送统计响应
 	c.sendFlashStatsResponse(command.CommandID, responseData)
 }
 
 // handleAutoSellCommand 处理自动卖出命令
-func (c *Client) handleAutoSellCommand(message string) {
-	log.Printf("🔧 [调试] 收到自动卖出命令原始消息: %s", message)
+func (c *Client) handleAutoSellCommand(payload string) {
+	// 首先检查节点是否已授权
+	if !c.isAuthorized() {
+		log.Printf("⚠️ 节点未授权，拒绝处理自动卖出命令")
+		return
+	}
+
+	log.Printf("🔧 [调试] 收到自动卖出命令原始消息: %s", payload)
 
 	var command binance.Command
-	if err := json.Unmarshal([]byte(message), &command); err != nil {
+	if err := json.Unmarshal([]byte(payload), &command); err != nil {
 		log.Printf("❌ 自动卖出命令解析失败: %v", err)
-		log.Printf("   原始消息: %s", message)
+		log.Printf("   原始消息: %s", payload)
 		return
 	}
 
@@ -1200,13 +1318,13 @@ func (c *Client) handleAutoSellCommand(message string) {
 	log.Printf("📨 收到自动卖出命令: %s (类型: %s, 目标节点: %s)", command.CommandID, command.CommandType, command.TargetNode)
 
 	// 将 Payload 转换为 map[string]interface{}
-	payload, ok := command.Payload.(map[string]interface{})
+	payloadMap, ok := command.Payload.(map[string]interface{})
 	if !ok {
 		log.Printf("❌ 自动卖出命令Payload格式错误")
 		return
 	}
 
-	action, ok := payload["action"].(string)
+	action, ok := payloadMap["action"].(string)
 	if !ok {
 		log.Printf("❌ 自动卖出命令缺少action字段")
 		return
@@ -1520,18 +1638,35 @@ func (c *Client) sendFlashResponse(taskID, status, message string) {
 }
 
 // sendFlashStatsResponse 发送Flash Trade统计响应
-func (c *Client) sendFlashStatsResponse(commandID string, data map[string]interface{}) {
-	response := map[string]interface{}{
-		"command_id": commandID,
-		"node_id":    c.nodeID,
-		"data":       data,
-		"timestamp":  utils.GetCurrentTimestamp(),
+func (c *Client) sendFlashStatsResponse(commandID string, stats map[string]interface{}) {
+	// 构建响应数据
+	responseData := map[string]interface{}{
+		"node_id": c.nodeID,
+		"stats":   stats,
 	}
 
-	if err := c.redisClient.PublishCommand("flash_stats_responses", response); err != nil {
-		log.Printf("❌ Flash统计响应发送失败: %v", err)
-	} else {
-		log.Printf("📤 Flash统计响应已发送")
+	// 构建响应命令
+	response := binance.Command{
+		CommandID:   commandID,
+		CommandType: "flash_stats_response",
+		TargetNode:  "",  // 不指定目标节点，发送给所有节点
+		Payload:    responseData,
+	}
+
+	// 序列化响应
+	responseBytes, err := json.Marshal(response)
+	if err != nil {
+		log.Printf("❌ 序列化Flash统计响应失败: %v", err)
+		return
+	}
+
+	// 发布响应到Redis
+	if c.redisClient != nil {
+		if err := c.redisClient.PublishCommand("flash_stats_response", string(responseBytes)); err != nil {
+			log.Printf("❌ 发布Flash统计响应失败: %v", err)
+		} else {
+			log.Printf("📤 已发送Flash统计响应")
+		}
 	}
 }
 
@@ -1554,14 +1689,20 @@ func (c *Client) startAccountStatusReporting() {
 func (c *Client) reportAccountStatus() {
 	// 检查Redis客户端是否可用
 	if c.redisClient == nil {
-		log.Printf("⚠️ Redis客户端未初始化，跳过账号状态上报")
+		// 仅在调试模式下显示日志
+		if os.Getenv("DEBUG") == "1" {
+			log.Printf("⚠️ Redis客户端未初始化，跳过账号状态上报")
+		}
 		return
 	}
 
-	// 🔧 修复：从Redis获取分配给当前节点的账号
+	// 从Redis获取分配给当前节点的账号
 	redisAccounts, err := c.getAccountsFromRedis()
 	if err != nil {
-		log.Printf("❌ 从Redis获取账号失败: %v", err)
+		// 仅在调试模式下显示日志
+		if os.Getenv("DEBUG") == "1" {
+			log.Printf("❌ 从Redis获取账号失败: %v", err)
+		}
 		return
 	}
 
@@ -1574,11 +1715,12 @@ func (c *Client) reportAccountStatus() {
 	}
 
 	if len(nodeAccounts) == 0 {
-		log.Printf("📭 节点 %s 暂无分配的账号，跳过状态上报", c.nodeID)
+		// 仅在调试模式下显示日志
+		if os.Getenv("DEBUG") == "1" {
+			log.Printf("📭 节点暂无分配的账号，跳过状态上报")
+		}
 		return
 	}
-
-	log.Printf("📊 节点 %s 开始上报账号状态，分配账号数量: %d", c.nodeID, len(nodeAccounts))
 
 	// 获取Flash Trade统计数据（从 flash_trade.go 接口）
 	flashStats := c.getFlashTradeStats()
@@ -1587,7 +1729,7 @@ func (c *Client) reportAccountStatus() {
 	var accountReports []map[string]interface{}
 
 	for _, account := range nodeAccounts {
-		// 🔧 修复：从Flash Trade统计中获取账号状态
+		// 从Flash Trade统计中获取账号状态
 		var isLooping bool
 		var currentToken string
 		var currentTaskID string
@@ -1608,55 +1750,27 @@ func (c *Client) reportAccountStatus() {
 					totalLossRate, _ = accountData["total_loss_rate"].(float64)
 					tradeCount, _ = accountData["trade_count"].(int)
 
-					if lastTradeStr, ok := accountData["last_trade_time"].(string); ok {
-						lastTradeTime, _ = time.Parse(time.RFC3339, lastTradeStr)
+					// 获取最后交易时间
+					if lastTradeTimeUnix, ok := accountData["last_trade_time"].(float64); ok {
+						lastTradeTime = time.Unix(int64(lastTradeTimeUnix), 0)
 					}
-					if taskStartStr, ok := accountData["task_start_time"].(string); ok {
-						taskStartTime, _ = time.Parse(time.RFC3339, taskStartStr)
-					}
+
+					// 获取任务开始时间（默认为当前时间减去1小时）
+					taskStartTime = time.Now().Add(-1 * time.Hour)
 				}
 			}
 		}
-
-		// 构建账号统计
-		_ = &AccountStats{
-			TotalVolume:   totalVolume,
-			TargetVolume:  targetVolume,
-			TradeCount:    tradeCount,
-			TotalLoss:     totalLoss,
-			TotalLossRate: totalLossRate,
-			IsLooping:     isLooping,
-			CurrentToken:  currentToken,
-			CurrentTaskID: currentTaskID,
-			LastTradeTime: lastTradeTime,
-			TaskStartTime: taskStartTime,
-		}
-
-		// 🔧 修复：构建报告使用Redis数据和Flash Trade统计
-		var expiresAt int64
-		var createdAt int64
-		var updatedAt int64
-
-		// 计算过期时间（4.5天后）
-		if !taskStartTime.IsZero() {
-			expiresAt = taskStartTime.Add(4*24*time.Hour + 12*time.Hour).Unix()
-		} else {
-			expiresAt = time.Now().Add(4*24*time.Hour + 12*time.Hour).Unix()
-		}
-
-		// 使用当前时间作为创建和更新时间
-		now := time.Now()
-		createdAt = now.Unix()
-		updatedAt = now.Unix()
 
 		// 计算完成率
 		var completionRate float64
 		if targetVolume > 0 {
 			completionRate = (totalVolume / targetVolume) * 100
-			if completionRate > 100 {
-				completionRate = 100
-			}
 		}
+
+		// 默认过期时间为4.5天后
+		expiresAt := time.Now().Add(4*24*time.Hour + 12*time.Hour).Unix()
+		createdAt := time.Now().Add(-24 * time.Hour).Unix() // 假设创建于24小时前
+		updatedAt := time.Now().Unix()                      // 当前时间
 
 		report := map[string]interface{}{
 			"account_id":      account.AccountID,
@@ -1708,97 +1822,161 @@ func (c *Client) reportAccountStatus() {
 		"flash_stats": flashStats,
 	}
 
-	// 发送状态报告前记录详细信息
-	log.Printf("📤 准备发送账号状态报告:")
-	log.Printf("   节点ID: %s", c.nodeID)
-	log.Printf("   账号数量: %d", len(accountReports))
-	log.Printf("   活跃账号: %d", len(c.accountManager.GetActiveLoopingAccounts()))
-	log.Printf("   过期账号: %d", 0) // 从Redis获取的数据不会过期
-
 	// 发送状态报告
 	if err := c.redisClient.PublishCommand("account_status_reports", statusReport); err != nil {
-		log.Printf("❌ 账号状态上报失败: %v", err)
+		// 仅在调试模式下显示错误
+		if os.Getenv("DEBUG") == "1" {
+			log.Printf("❌ 账号状态上报失败: %v", err)
+		}
 	} else {
-		log.Printf("✅ 账号状态上报成功: %d个账号", len(accountReports))
+		// 仅在调试模式下显示成功信息
+		if os.Getenv("DEBUG") == "1" {
+			log.Printf("✅ 账号状态上报成功: %d个账号", len(accountReports))
+		}
 	}
 }
 
 // checkAuthorizationStatus 检查节点授权状态
 func (c *Client) checkAuthorizationStatus() {
-	ticker := time.NewTicker(60 * time.Second) // 每60秒检查一次授权状态
+	// 无授权版本：直接返回，不进行授权检查
+	log.Println("🔑 无授权版本：跳过授权检查")
+	return
+	
+	// 以下是原始授权检查代码，已被禁用
+	/*
+	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
-
-	// 立即检查一次
-	c.performAuthorizationCheck()
 
 	for {
 		select {
 		case <-ticker.C:
-			c.performAuthorizationCheck()
+			if c.isShuttingDown {
+				return
+			}
+
+			// 检查授权状态
+			req := &pb.CheckAuthRequest{
+				NodeId: c.nodeID,
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			resp, err := c.masterClient.CheckAuth(ctx, req)
+			cancel()
+
+			if err != nil {
+				log.Printf("❌ 授权检查失败: %v", err)
+				continue
+			}
+
+			if !resp.IsAuthorized {
+				log.Printf("⚠️ 节点未授权，将在30秒后退出")
+				time.Sleep(30 * time.Second)
+				log.Printf("🛑 节点未授权，程序退出")
+				os.Exit(1)
+			}
 		case <-c.stopChan:
 			return
 		}
 	}
-}
-
-// performAuthorizationCheck 执行授权状态检查
-func (c *Client) performAuthorizationCheck() {
-	if c.redisClient == nil {
-		return
-	}
-
-	ctx := context.Background()
-	key := fmt.Sprintf("node_auth:%s", c.nodeID)
-
-	result, err := c.redisClient.GetNativeClient().Get(ctx, key).Result()
-	if err != nil {
-		if err.Error() != "redis: nil" {
-			log.Printf("⚠️ 检查授权状态失败: %v", err)
-		}
-		c.handleUnauthorizedStatus()
-		return
-	}
-
-	if result == "authorized" {
-		c.handleAuthorizedStatus()
-	} else {
-		c.handleUnauthorizedStatus()
-	}
-}
-
-// handleAuthorizedStatus 处理已授权状态
-func (c *Client) handleAuthorizedStatus() {
-	// 如果之前是未授权状态，现在变为已授权，记录日志
-	if c.status == "unauthorized" {
-		log.Printf("✅ 节点已获得授权，可以接收账号数据")
-		c.status = "online"
-	}
-}
-
-// handleUnauthorizedStatus 处理未授权状态
-func (c *Client) handleUnauthorizedStatus() {
-	if c.status != "unauthorized" {
-		log.Printf("⚠️ 节点未授权，无法接收账号数据。请联系管理员进行授权。")
-		log.Printf("💡 节点ID: %s", c.nodeID)
-		c.status = "unauthorized"
-	}
+	*/
 }
 
 // isAuthorized 检查节点是否已授权
 func (c *Client) isAuthorized() bool {
-	if c.redisClient == nil {
+	// 无授权版本：直接返回true，跳过授权检查
+	log.Println("🔑 无授权版本：isAuthorized总是返回true")
+	return true
+	
+	// 以下是原始授权检查代码，已被禁用
+	/*
+	// 只使用nodes集合进行授权检查
+	if c.useMongoAuth && c.mongoAuthManager != nil {
+		return c.checkNodesCollectionAuth()
+	}
+	
+	// 授权系统未配置或不可用
+	return false
+	*/
+}
+
+// maskURI 掩盖URI中的敏感信息
+func maskURI(uri string) string {
+	if uri == "" {
+		return "<empty>"
+	}
+	
+	// 简单的掩盖方式，只显示URI的前10个和后10个字符
+	if len(uri) > 20 {
+		return uri[:10] + "..." + uri[len(uri)-10:]
+	}
+	
+	return "<uri_masked>"
+}
+
+// checkNodesCollectionAuth 检查nodes集合中的授权状态
+func (c *Client) checkNodesCollectionAuth() bool {
+	if c.mongoAuthManager == nil || c.mongoAuthManager.GetClient() == nil {
 		return false
 	}
-
-	ctx := context.Background()
-	key := fmt.Sprintf("node_auth:%s", c.nodeID)
-
-	result, err := c.redisClient.GetNativeClient().Get(ctx, key).Result()
+	
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	
+	// 获取nodes集合
+	collection := c.mongoAuthManager.GetClient().Database("alpha").Collection("nodes")
+	
+	// 查询节点信息
+	var nodeInfo struct {
+		IsAuthorized int `bson:"is_authorized"`
+	}
+	
+	// 执行查询
+	err := collection.FindOne(ctx, bson.M{"node_id": c.nodeID}).Decode(&nodeInfo)
 	if err != nil {
 		return false
 	}
+	
+	// 只检查is_authorized字段是否为1
+	authorized := nodeInfo.IsAuthorized == 1
+	
+	return authorized
+}
 
-	return result == "authorized"
+// registerNodeInMongoDB 在MongoDB中注册节点
+func (c *Client) registerNodeInMongoDB() error {
+	if c.mongoAuthManager == nil || c.mongoAuthManager.GetClient() == nil {
+		return fmt.Errorf("MongoDB客户端未初始化")
+	}
+	
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	
+	// 获取nodes集合
+	collection := c.mongoAuthManager.GetClient().Database("alpha").Collection("nodes")
+	
+	// 获取节点信息
+	hostname, _ := os.Hostname()
+	ipAddress := getLocalIP()
+	macAddress := utils.GetMACAddress()
+	osInfo := fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH)
+	
+	// 创建节点信息
+	nodeInfo := bson.M{
+		"node_id":        c.nodeID,
+		"user":           "",
+		"binance_id":     "",
+		"hostname":       hostname,
+		"ip_address":     ipAddress,
+		"mac_address":    macAddress,
+		"os_info":        osInfo,
+		"register_time":  time.Now(),
+		"is_authorized":  0, // 初始未授权
+		"last_heartbeat": time.Now(),
+	}
+	
+	// 插入节点信息
+	_, err := collection.InsertOne(ctx, nodeInfo)
+	return err
 }
 
 // startAccountSync 启动账号同步
@@ -1822,8 +2000,6 @@ func (c *Client) startAccountSync() {
 
 // syncAccountsFromMaster 从主控端同步账号数据
 func (c *Client) syncAccountsFromMaster() {
-	log.Printf("🔄 开始从主控端同步账号数据...")
-
 	// 构建主控端HTTP地址
 	masterHTTPAddr := c.getMasterHTTPAddr()
 	if masterHTTPAddr == "" {
@@ -1837,19 +2013,28 @@ func (c *Client) syncAccountsFromMaster() {
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Get(url)
 	if err != nil {
-		log.Printf("❌ 请求主控端账号数据失败: %v", err)
+		// 仅在调试模式下显示详细错误
+		if os.Getenv("DEBUG") == "1" {
+			log.Printf("❌ 请求主控端账号数据失败: %v", err)
+		}
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		log.Printf("❌ 主控端返回错误状态: %d", resp.StatusCode)
+		// 仅在调试模式下显示详细错误
+		if os.Getenv("DEBUG") == "1" {
+			log.Printf("❌ 主控端返回错误状态: %d", resp.StatusCode)
+		}
 		return
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		log.Printf("❌ 读取响应失败: %v", err)
+		// 仅在调试模式下显示详细错误
+		if os.Getenv("DEBUG") == "1" {
+			log.Printf("❌ 读取响应失败: %v", err)
+		}
 		return
 	}
 
@@ -1868,31 +2053,24 @@ func (c *Client) syncAccountsFromMaster() {
 	}
 
 	if err := json.Unmarshal(body, &response); err != nil {
-		log.Printf("❌ 解析响应失败: %v", err)
+		// 仅在调试模式下显示详细错误
+		if os.Getenv("DEBUG") == "1" {
+			log.Printf("❌ 解析响应失败: %v", err)
+		}
 		return
 	}
-
-	if !response.Success {
-		log.Printf("❌ 主控端返回失败响应")
-		return
-	}
-
-	// 从主控端获取到账号
 
 	// 同步账号到本地
 	syncCount := 0
 	for _, masterAccount := range response.Accounts {
-		// 转换为本地账号格式
+		// 创建本地账号对象
 		localAccount := &Account{
 			ID:          masterAccount.ID,
 			Name:        masterAccount.Name,
 			Csrftoken:   masterAccount.Csrftoken,
 			Cookie:      masterAccount.Cookie,
 			Status:      masterAccount.Status,
-			CreatedAt:   time.Now(),
-			UpdatedAt:   time.Now(),
-			ExpiresAt:   time.Now().Add(4*24*time.Hour + 12*time.Hour), // 4.5天
-			Description: fmt.Sprintf("从主控端同步 (节点: %s)", masterAccount.AssignedNode),
+			Description: fmt.Sprintf("从主控端同步"),
 		}
 
 		// 检查本地是否已存在
@@ -1903,28 +2081,31 @@ func (c *Client) syncAccountsFromMaster() {
 				existingAccount.Status != masterAccount.Status {
 
 				if err := c.accountManager.UpdateAccount(masterAccount.ID, localAccount); err != nil {
-					log.Printf("⚠️ 更新账号失败 %s: %v", masterAccount.ID, err)
+					// 仅在调试模式下显示详细错误
+					if os.Getenv("DEBUG") == "1" {
+						log.Printf("⚠️ 更新账号失败 %s: %v", masterAccount.ID, err)
+					}
 				} else {
 					syncCount++
-					log.Printf("🔄 账号已更新: %s", masterAccount.ID)
 				}
 			}
 		} else {
 			// 添加新账号
 			if err := c.accountManager.AddAccount(localAccount); err != nil {
-				log.Printf("⚠️ 添加账号失败 %s: %v", masterAccount.ID, err)
+				// 仅在调试模式下显示详细错误
+				if os.Getenv("DEBUG") == "1" {
+					log.Printf("⚠️ 添加账号失败 %s: %v", masterAccount.ID, err)
+				}
 			} else {
 				syncCount++
-				log.Printf("➕ 账号已添加: %s", masterAccount.ID)
 			}
 		}
 	}
 
-	log.Printf("✅ 账号同步完成: 同步了 %d 个账号", syncCount)
-
-	// 更新日志中的账号数量
-	total, active := c.accountManager.GetAccountCount()
-	log.Printf("📊 当前账号状态: 总计 %d 个，活跃 %d 个", total, active)
+	// 只在有账号同步时显示日志
+	if syncCount > 0 {
+		log.Printf("✅ 同步了 %d 个账号", syncCount)
+	}
 }
 
 // getLocalIPAddress 获取本机真实IP地址
@@ -2041,12 +2222,113 @@ func (c *Client) getPrivateIP() string {
 	return ""
 }
 
-// callFlashTradeAPI 调用 flash_trade.go 的 /trade 接口 - 带统一重试策略
+// callFlashTradeAPI 调用 flash_trade.go 的 /trade 接口 - 带统一重试策略（兼容旧版本）
 func (c *Client) callFlashTradeAPI(accountID, tokenAddress string, usdtAmount float64, baseAsset string, targetVolume float64, autoLoop bool, pricePrecision int, csrftoken, cookie string) bool {
 	return c.callFlashTradeAPIWithRetry(accountID, tokenAddress, usdtAmount, baseAsset, targetVolume, autoLoop, pricePrecision, csrftoken, cookie, 0)
 }
 
-// callFlashTradeAPIWithRetry 带重试的 Flash Trade API 调用
+// callFlashTradeAPIWithChain 调用 flash_trade.go 的 /trade 接口 - 支持链ID和价格模式
+func (c *Client) callFlashTradeAPIWithChain(accountID, tokenAddress string, usdtAmount float64, baseAsset string, targetVolume float64, autoLoop bool, pricePrecision int, chainID, priceMode, csrftoken, cookie string) bool {
+	return c.callFlashTradeAPIWithChainAndRetry(accountID, tokenAddress, usdtAmount, baseAsset, targetVolume, autoLoop, pricePrecision, chainID, priceMode, csrftoken, cookie, 0)
+}
+
+// callFlashTradeAPIWithChainAndRetry 带重试的 Flash Trade API 调用 - 支持链ID和价格模式
+func (c *Client) callFlashTradeAPIWithChainAndRetry(accountID, tokenAddress string, usdtAmount float64, baseAsset string, targetVolume float64, autoLoop bool, pricePrecision int, chainID, priceMode, csrftoken, cookie string, retryCount int) bool {
+	// 调用 flash_trade.go 的 /trade 接口
+
+	// 构建请求体（完全按照 flash_trade.go 的 TradeRequest 结构）
+	requestBody := map[string]interface{}{
+		"token_address":   tokenAddress,
+		"usdt_amount":     usdtAmount,
+		"base_asset":      baseAsset,
+		"csrftoken":       csrftoken,
+		"cookie":          cookie,
+		"target_volume":   targetVolume,
+		"auto_loop":       autoLoop,
+		"price_precision": pricePrecision,
+		"chain_id":        chainID,    // 🔧 新增：传递链ID
+		"price_mode":      priceMode,  // 🔧 新增：传递价格模式
+		"min_delay":       1,          // 默认最小延迟
+		"max_delay":       30,         // 默认最大延迟
+	}
+
+	// 转换为 JSON
+	jsonData, err := json.Marshal(requestBody)
+	if err != nil {
+		log.Printf("❌ [%s] JSON序列化失败: %v", accountID, err)
+		// JSON序列化失败不重试
+		return false
+	}
+
+	// 🔧 修复：支持配置Flash Trade服务地址
+	flashTradeURL := os.Getenv("FLASH_TRADE_URL")
+	if flashTradeURL == "" {
+		flashTradeURL = "http://localhost:8080" // 默认本地服务
+	}
+	url := flashTradeURL + "/trade"
+
+	// 调用Flash Trade服务
+
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		log.Printf("❌ [%s] 创建HTTP请求失败: %v", accountID, err)
+		// 请求创建失败不重试
+		return false
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	// 设置超时
+	client := &http.Client{
+		Timeout: 30 * time.Second, // 30秒超时
+	}
+
+	log.Printf("🔧 [%s] 调用Flash Trade API: %s", accountID, url)
+	log.Printf("   参数: 代币=%s, 金额=%.2f, 链=%s, 模式=%s", tokenAddress, usdtAmount, chainID, priceMode)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("❌ [%s] Flash Trade API调用失败: %v", accountID, err)
+
+		// 网络错误重试逻辑
+		maxRetries := 3
+		if retryCount < maxRetries {
+			log.Printf("🔄 [%s] 重试Flash Trade API调用 (%d/%d)", accountID, retryCount+1, maxRetries)
+			time.Sleep(time.Duration(retryCount+1) * 2 * time.Second) // 递增延迟
+			return c.callFlashTradeAPIWithChainAndRetry(accountID, tokenAddress, usdtAmount, baseAsset, targetVolume, autoLoop, pricePrecision, chainID, priceMode, csrftoken, cookie, retryCount+1)
+		}
+		return false
+	}
+	defer resp.Body.Close()
+
+	// 读取响应
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("❌ [%s] 读取Flash Trade响应失败: %v", accountID, err)
+		return false
+	}
+
+	log.Printf("✅ [%s] Flash Trade API响应: %s", accountID, string(body))
+
+	// 解析响应
+	var response map[string]interface{}
+	if err := json.Unmarshal(body, &response); err != nil {
+		log.Printf("❌ [%s] 解析Flash Trade响应失败: %v", accountID, err)
+		return false
+	}
+
+	// 检查响应状态
+	if success, ok := response["success"].(bool); ok && success {
+		log.Printf("✅ [%s] Flash Trade执行成功", accountID)
+		return true
+	} else {
+		message, _ := response["message"].(string)
+		log.Printf("❌ [%s] Flash Trade执行失败: %s", accountID, message)
+		return false
+	}
+}
+
+// callFlashTradeAPIWithRetry 带重试的 Flash Trade API 调用（兼容旧版本）
 func (c *Client) callFlashTradeAPIWithRetry(accountID, tokenAddress string, usdtAmount float64, baseAsset string, targetVolume float64, autoLoop bool, pricePrecision int, csrftoken, cookie string, retryCount int) bool {
 	// 调用 flash_trade.go 的 /trade 接口
 
@@ -2624,6 +2906,18 @@ func (c *Client) sendCommandAck(commandID, status, message string) {
 
 // getAccountAuthFromRedis 从Redis获取账号认证信息
 func (c *Client) getAccountAuthFromRedis(accountID string) (string, string, error) {
+	// 如果使用MongoDB授权
+	if c.useMongoAuth && c.mongoAuthManager != nil {
+		// 从MongoDB获取账号信息
+		account, err := c.mongoAuthManager.GetAccountAuth(accountID)
+		if err != nil {
+			return "", "", fmt.Errorf("从MongoDB获取账号认证信息失败: %v", err)
+		}
+		
+		return account.Csrftoken, account.Cookie, nil
+	}
+
+	// 否则从Redis获取
 	if c.redisClient == nil {
 		return "", "", fmt.Errorf("Redis客户端未初始化")
 	}
@@ -2910,4 +3204,22 @@ func (c *Client) resumeAllFlashTrade() int {
 
 	log.Printf("✅ Flash Trade全部恢复完成，共恢复 %d 个账户", resumedCount)
 	return resumedCount
+}
+
+// getLocalIP 获取本地IP地址
+func getLocalIP() string {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return "unknown"
+	}
+	
+	for _, addr := range addrs {
+		if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+			if ipnet.IP.To4() != nil {
+				return ipnet.IP.String()
+			}
+		}
+	}
+	
+	return "unknown"
 }

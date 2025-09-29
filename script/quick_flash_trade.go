@@ -22,6 +22,7 @@ type QuickFlashTradeRequest struct {
 	PricePrecision int32   `json:"price_precision"`
 	ChainID        string  `json:"chain_id"`
 	PriceMode      string  `json:"price_mode"`
+	SpeedMode      string  `json:"speed_mode"`      // 🚀 新增：速度模式
 	ForceStart     bool    `json:"force_start"`
 	StopExisting   bool    `json:"stop_existing"`
 }
@@ -32,6 +33,7 @@ type PresetConfig struct {
 	Description  string
 	ChainID      string
 	PriceMode    string
+	SpeedMode    string  // 🚀 新增：速度模式
 	USDTAmount   float64
 	TargetVolume float64
 	BaseAsset    string
@@ -41,45 +43,50 @@ type PresetConfig struct {
 var presetConfigs = []PresetConfig{
 	{
 		Name:         "BSC_MARKET_SMALL",
-		Description:  "BSC链 - Market模式 - 小额测试",
+		Description:  "BSC链 - Market模式 - 小额测试 - 慢速模式",
 		ChainID:      "56",
 		PriceMode:    "market",
+		SpeedMode:    "slow",     // 🚀 新增：默认慢速模式
 		USDTAmount:   10,
 		TargetVolume: 50,
 		BaseAsset:    "ALPHA_TEST",
 	},
 	{
 		Name:         "BSC_MARKET_NORMAL",
-		Description:  "BSC链 - Market模式 - 正常交易",
+		Description:  "BSC链 - Market模式 - 正常交易 - 普通模式",
 		ChainID:      "56",
 		PriceMode:    "market",
+		SpeedMode:    "normal",   // 🚀 新增：普通模式
 		USDTAmount:   100,
 		TargetVolume: 1000,
 		BaseAsset:    "ALPHA_251",
 	},
 	{
 		Name:         "BSC_LIMIT_NORMAL",
-		Description:  "BSC链 - Limit模式 - 正常交易",
+		Description:  "BSC链 - Limit模式 - 正常交易 - 普通模式",
 		ChainID:      "56",
 		PriceMode:    "limit",
+		SpeedMode:    "normal",   // 🚀 新增：普通模式
 		USDTAmount:   100,
 		TargetVolume: 1000,
 		BaseAsset:    "ALPHA_251",
 	},
 	{
 		Name:         "SOLANA_COMBINED_NORMAL",
-		Description:  "Solana链 - Combined模式 - 正常交易",
+		Description:  "Solana链 - Combined模式 - 正常交易 - 普通模式",
 		ChainID:      "CT_501",
 		PriceMode:    "combined",
+		SpeedMode:    "normal",   // 🚀 新增：普通模式
 		USDTAmount:   100,
 		TargetVolume: 1000,
 		BaseAsset:    "ALPHA_251",
 	},
 	{
 		Name:         "SOLANA_MARKET_NORMAL",
-		Description:  "Solana链 - Market模式 - 正常交易",
+		Description:  "Solana链 - Market模式 - 正常交易 - 普通模式",
 		ChainID:      "CT_501",
 		PriceMode:    "market",
+		SpeedMode:    "normal",   // 🚀 新增：普通模式
 		USDTAmount:   100,
 		TargetVolume: 1000,
 		BaseAsset:    "ALPHA_251",
@@ -138,6 +145,7 @@ func main() {
 		PricePrecision: 8,                            // 默认8位精度
 		ChainID:        selectedPreset.ChainID,
 		PriceMode:      selectedPreset.PriceMode,
+		SpeedMode:      selectedPreset.SpeedMode,     // 🚀 新增：传递速度模式
 		ForceStart:     true,                         // 强制启动
 		StopExisting:   true,                         // 停止现有任务
 	}
@@ -149,6 +157,7 @@ func main() {
 	fmt.Printf("   代币地址: %s\n", request.TokenAddress)
 	fmt.Printf("   链ID: %s (%s)\n", request.ChainID, getChainName(request.ChainID))
 	fmt.Printf("   价格模式: %s\n", request.PriceMode)
+	fmt.Printf("   速度模式: %s (%s)\n", request.SpeedMode, getSpeedModeDescription(request.SpeedMode))
 	fmt.Printf("   USDT金额: %.2f\n", request.USDTAmount)
 	fmt.Printf("   目标交易量: %.2f\n", request.TargetVolume)
 	fmt.Printf("   基础资产: %s\n", request.BaseAsset)
@@ -184,8 +193,8 @@ func showPresets() {
 	fmt.Println("🔧 可用预设配置:")
 	for i, preset := range presetConfigs {
 		fmt.Printf("   %d. %s - %s\n", i+1, preset.Name, preset.Description)
-		fmt.Printf("      链: %s, 模式: %s, 金额: %.0f USDT, 目标量: %.0f\n", 
-			preset.ChainID, preset.PriceMode, preset.USDTAmount, preset.TargetVolume)
+		fmt.Printf("      链: %s, 价格模式: %s, 速度模式: %s, 金额: %.0f USDT, 目标量: %.0f\n",
+			preset.ChainID, preset.PriceMode, preset.SpeedMode, preset.USDTAmount, preset.TargetVolume)
 	}
 	fmt.Println()
 }
@@ -197,6 +206,20 @@ func getChainName(chainID string) string {
 		return "BSC"
 	case "CT_501":
 		return "Solana"
+	default:
+		return "未知"
+	}
+}
+
+// 🚀 getSpeedModeDescription 获取速度模式描述
+func getSpeedModeDescription(mode string) string {
+	switch mode {
+	case "fast":
+		return "快速模式 - 高效率，中等风控风险"
+	case "normal":
+		return "普通模式 - 平衡效率与安全，推荐使用"
+	case "slow":
+		return "慢速模式 - 极度保守，最低风控风险"
 	default:
 		return "未知"
 	}

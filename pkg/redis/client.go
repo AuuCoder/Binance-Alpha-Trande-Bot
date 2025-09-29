@@ -36,11 +36,11 @@ func NewClient(config Config) *Client {
 	// 测试连接
 	_, err := rdb.Ping(ctx).Result()
 	if err != nil {
-		log.Printf("❌ Redis连接失败: %v", err)
+		
 		return nil
 	}
 
-	log.Printf("✅ Redis连接成功: %s", config.Addr)
+
 	return &Client{
 		rdb: rdb,
 		ctx: ctx,

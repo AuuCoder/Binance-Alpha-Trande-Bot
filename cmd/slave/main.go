@@ -17,6 +17,8 @@ import (
 	"alpha-autosell-bot/internal/common"
 	"alpha-autosell-bot/internal/slave"
 	"alpha-autosell-bot/pkg/utils"
+	"encoding/json"
+	"io/ioutil"
 )
 
 var (
@@ -52,7 +54,7 @@ func main() {
 		config.Server.MasterAddr = *masterAddr
 	} else if config.Server.MasterAddr == "" {
 		config.Server.MasterAddr = "localhost:29090"
-		log.Printf("⚠️ 使用默认主控端地址: localhost:29090")
+		
 	}
 
 	// 配置文件优先，只有在命令行明确指定时才覆盖
@@ -60,20 +62,42 @@ func main() {
 		config.Server.Port = *port
 	} else if config.Server.Port == 0 {
 		config.Server.Port = 28081
-		log.Printf("⚠️ 使用默认端口: 28081")
+		
 	}
 
 	// 确保是被控端模式
 	config.Server.Mode = "slave"
 
+	// 确保数据库配置正确
+	if config.MongoDB == nil {
+		config.MongoDB = &common.MongoDBConfig{
+			URI:      "mongodb+srv://yuucoder:yuucoder0208..@bn-alpha.vamde.mongodb.net/?retryWrites=true&w=majority&appName=bn-alpha",
+			Database: "alpha",
+			Enabled:  true,
+			MaxPoolSize: 20,
+			MinPoolSize: 5,
+			MaxConnIdleTime: 300,
+		}
+	} else if !config.MongoDB.Enabled || config.MongoDB.URI == "" {
+		config.MongoDB.URI = "mongodb+srv://yuucoder:yuucoder0208..@bn-alpha.vamde.mongodb.net/?retryWrites=true&w=majority&appName=bn-alpha"
+		config.MongoDB.Database = "alpha"
+		config.MongoDB.Enabled = true
+		// 设置连接池参数（如果未设置）
+		if config.MongoDB.MaxPoolSize == 0 {
+			config.MongoDB.MaxPoolSize = 20
+		}
+		if config.MongoDB.MinPoolSize == 0 {
+			config.MongoDB.MinPoolSize = 5
+		}
+		if config.MongoDB.MaxConnIdleTime == 0 {
+			config.MongoDB.MaxConnIdleTime = 300
+		}
+	}
+
 	// 验证配置
 	if err := config.Validate(); err != nil {
 		log.Fatalf("❌ 配置验证失败: %v", err)
 	}
-
-	log.Printf("🚀 启动被控端客户端")
-	log.Printf("📋 主控端地址: %s", config.Server.MasterAddr)
-	log.Printf("📋 HTTP端口: %d", config.Server.Port)
 
 	// 🔧 修改：默认启动flash_trade服务
 	var flashTradeCmd *exec.Cmd
@@ -94,15 +118,15 @@ func main() {
 		}
 	}
 
-	// 创建被控端客户端
+	// 创建客户端
 	client, err := slave.NewClient(config)
 	if err != nil {
-		log.Fatalf("❌ 创建被控端客户端失败: %v", err)
+		log.Fatalf("❌ 创建客户端失败: %v", err)
 	}
 
 	// 启动客户端
 	if err := client.Start(); err != nil {
-		log.Fatalf("❌ 启动被控端客户端失败: %v", err)
+		log.Fatalf("❌ 启动客户端失败: %v", err)
 	}
 
 	// 启动简单的状态API服务器（仅用于监控）
@@ -117,7 +141,7 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	log.Printf("✅ 被控端启动完成")
+	log.Printf("✅ 服务启动完成")
 
 	<-sigChan
 	log.Printf("🛑 正在关闭...")
@@ -147,8 +171,41 @@ func startFlashTradeService() *exec.Cmd {
 		cmd = exec.Command("go", "run", "flash_trade.go")
 	} else {
 		log.Printf("⚠️ 未找到 flash_trade 相关文件，跳过启动")
-		log.Printf("💡 提示: 被控端可以独立运行，不依赖 flash_trade 服务")
+		log.Printf("💡 提示: 服务可以独立运行，不依赖 flash_trade 服务")
 		return nil
+	}
+
+	// 确保slave和flash_trade使用相同的节点ID
+	// 读取配置文件中的节点ID
+	configData, err := ioutil.ReadFile("config.json")
+	if err == nil {
+		var configTemp struct {
+			Server struct {
+				NodeID string `json:"node_id"`
+			} `json:"server"`
+		}
+		if json.Unmarshal(configData, &configTemp) == nil {
+			// 如果配置文件中有节点ID，则将其写入临时配置文件
+			if configTemp.Server.NodeID != "" {
+				log.Printf("🔄 确保flash_trade使用相同的节点ID: %s", configTemp.Server.NodeID)
+				
+				// 创建临时配置文件
+				tempConfig := map[string]interface{}{
+					"server": map[string]interface{}{
+						"node_id": configTemp.Server.NodeID,
+					},
+				}
+				
+				tempConfigData, err := json.MarshalIndent(tempConfig, "", "  ")
+				if err == nil {
+					// 写入临时配置文件
+					if err := ioutil.WriteFile("flash_trade_config.json", tempConfigData, 0644); err == nil {
+						// 使用临时配置文件启动flash_trade
+						cmd.Args = append(cmd.Args, "-config", "flash_trade_config.json")
+					}
+				}
+			}
+		}
 	}
 
 	// 设置输出
@@ -158,7 +215,7 @@ func startFlashTradeService() *exec.Cmd {
 	// 启动服务
 	if err := cmd.Start(); err != nil {
 		log.Printf("❌ 启动 flash_trade 服务失败: %v", err)
-		log.Printf("💡 被控端将以独立模式运行")
+		log.Printf("💡 服务将以独立模式运行")
 		return nil
 	}
 
@@ -171,8 +228,7 @@ func startFlashTradeService() *exec.Cmd {
 
 	// 检查服务是否正常启动
 	if err := checkFlashTradeService(); err != nil {
-		log.Printf("⚠️ flash_trade 服务检查失败: %v", err)
-		log.Printf("💡 服务可能仍在启动中，被控端将继续运行")
+		log.Printf("💡 服务可能仍在启动中，将继续运行")
 	} else {
 		log.Printf("✅ flash_trade 服务检查通过")
 	}

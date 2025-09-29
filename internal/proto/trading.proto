@@ -305,6 +305,9 @@ message FlashTradeRequest {
   double target_volume = 6;     // 目标交易额
   bool auto_loop = 7;           // 是否自动循环
   int32 price_precision = 8;    // 价格精度位数
+  string chain_id = 9;          // 区块链ID (56=BSC, CT_501=Solana)
+  string price_mode = 10;       // 价格模式 (limit/market/combined/auto)
+  string speed_mode = 11;       // 🚀 新增：速度模式 (fast/normal/slow)
 }
 
 // Flash Trade 响应

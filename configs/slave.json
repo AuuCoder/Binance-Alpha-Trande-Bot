@@ -1,18 +1,26 @@
 {
   "server": {
-    "port": 18081,
+    "port": 28081,
     "host": "127.0.0.1",
     "mode": "slave",
     "node_id": "",
-    "master_addr": "localhost:19090"
+    "master_addr": "103.151.217.203:29090"
   },
   "redis": {
-    "addr": "43.156.131.41:6379",
+    "addr": "103.151.217.203:6379",
     "password": "",
     "db": 0
   },
+  "mongodb": {
+    "uri": "mongodb+srv://yuucoder:yuucoder0208..@bn-alpha.vamde.mongodb.net/?retryWrites=true&w=majority&appName=bn-alpha",
+    "database": "alpha",
+    "enabled": true,
+    "max_pool_size": 20,
+    "min_pool_size": 5,
+    "max_conn_idle_time": 300
+  },
   "grpc": {
-    "port": 19091,
+    "port": 29091,
     "max_recv_msg_size": 4194304,
     "max_send_msg_size": 4194304,
     "connection_timeout": 10,
