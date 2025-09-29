@@ -1,0 +1,16 @@
+[
+  {
+    "id": "slave-e08272f7",
+    "name": "乔松羽",
+    "ip": "43.134.57.189",
+    "csrftoken": "be6e64277a916f3368e97ce71e085c1c",
+    "cookie": "bnc-uuid=e4aae9c2-54d3-4dae-a0a8-cc11c5a1deeb; BNC_FV_KEY=33abb6e63c53addbb7630a04a76572ffe18c6cc1; lang=zh-CN; language=zh-CN; se_gd=AsTFgAlETQVBxQWECCQQgZZVRExYABVU1oHBbWkd1dXVAU1NWVVd1; se_gsd=dyEgFSNgNTQjDSc3JAMiIxAxBhcDAQsSWV1EVFNRVldRNFNT1; currentAccount=; logined=y; BNC-Location=CN; OptanonAlertBoxClosed=2025-08-28T10:43:06.949Z; _gcl_au=1.1.308728328.1756812744; changeBasisTimeZone=; theme=dark; se_sd=VANEVWl8MASFhMHUaEQMgZZBQV1EEEWV1UWRYVUV1lUUQBlNWV0T1"
+  },
+  {
+    "id": "slave-ceaf6ddd",
+    "name": "范冬华",
+    "ip": "43.156.61.167",
+    "csrftoken": "610fcabae9519cb2a9947a77bd4d48b8",
+    "cookie": "bnc-uuid=f7b3aebe-b596-41f7-bfb2-f33ce239432b; BNC_FV_KEY=334a57b08964a5259636a255396ac26f698123b1; lang=zh-CN; language=zh-CN; se_gd=RMJG1XlsAATVgca1RVRIgZZElAxNSBUUlsTRcUEF1dUUwUVNWVxc1; se_gsd=AzA1ChFWJTY3DREiJVU7MC4vUgcNDwoRU1tHU1dWVldSN1NT1"
+  }
+]

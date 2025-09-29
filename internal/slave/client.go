@@ -192,7 +192,7 @@ func (c *Client) Stop() {
 	if c.redisClient != nil {
 		c.redisClient.Close()
 	}
-
+	
 	// 关闭MongoDB连接
 	if c.mongoAuthManager != nil {
 		c.mongoAuthManager.Close()

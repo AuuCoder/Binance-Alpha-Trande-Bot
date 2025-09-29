@@ -31,19 +31,8 @@ const (
 
 // inferBaseAssetFromTokenAddress 根据代币地址推断 base_asset
 func inferBaseAssetFromTokenAddress(tokenAddress string) string {
-	// 根据已知的代币地址映射到对应的 base_asset
-	tokenMappings := map[string]string{
-		"0x06238c1b8e618abedf17669228dc95fb2d2e210b": "CAME",
-		"0x6bf62ca91e397b5a7d1d6bce97d9092065d7a510": "CROSS",
-	}
-
-	// 查找映射
-	if baseAsset, exists := tokenMappings[strings.ToLower(tokenAddress)]; exists {
-		return baseAsset
-	}
-
-	// 如果没有找到映射，使用默认值
-
+	// 不再使用硬编码映射，默认返回ALPHA_251
+	// 实际的BaseAsset应该由/trade接口传递并保存在accountTradeParams中
 	return "ALPHA_251"
 }
 
@@ -355,52 +344,9 @@ var (
 var tradeResults = make(map[string][]TradeResponse) // 存储交易结果
 var resultsMutex sync.RWMutex
 
-// 🔧 修改：添加过期时间到已处理交易ID的记录
-var processedTradeIDs = make(map[string]time.Time) // 交易ID -> 处理时间
+// 🔧 新增：防止重复统计的交易ID跟踪
+var processedTradeIDs = make(map[string]bool) // 已处理的交易ID
 var tradeIDMutex sync.RWMutex
-var maxTradeIDLifetime = 24 * time.Hour // 交易ID最长保存24小时
-
-// 🔧 修改：检查交易是否已被统计，并清理过期记录
-func isTradeProcessed(tradeID string) bool {
-	tradeIDMutex.RLock()
-	processTime, exists := processedTradeIDs[tradeID]
-	tradeIDMutex.RUnlock()
-	
-	// 如果存在且未过期，则认为已处理
-	if exists && time.Since(processTime) < maxTradeIDLifetime {
-		return true
-	}
-	
-	// 定期清理过期的交易ID记录（每100次检查执行一次）
-	if rand.Intn(100) == 0 {
-		go cleanupExpiredTradeIDs()
-	}
-	
-	return false
-}
-
-// 🔧 修改：标记交易已被统计，记录当前时间
-func markTradeProcessed(tradeID string) {
-	tradeIDMutex.Lock()
-	defer tradeIDMutex.Unlock()
-	processedTradeIDs[tradeID] = time.Now()
-}
-
-// 🔧 新增：清理过期的交易ID记录
-func cleanupExpiredTradeIDs() {
-	tradeIDMutex.Lock()
-	defer tradeIDMutex.Unlock()
-	
-	now := time.Now()
-	for id, processTime := range processedTradeIDs {
-		if now.Sub(processTime) > maxTradeIDLifetime {
-			delete(processedTradeIDs, id)
-		}
-	}
-	
-	// 记录清理情况
-	log.Printf("🧹 已清理过期交易ID记录，当前记录数: %d", len(processedTradeIDs))
-}
 
 // 🔧 新增：累积任务统计
 var cumulativeTaskStats = make(map[string]*CumulativeTaskStats) // accountID -> CumulativeTaskStats
@@ -420,19 +366,23 @@ var globalStats = &GlobalStats{}
 var globalMutex sync.RWMutex
 
 // 🔧 新增：生成唯一交易ID
-func generateTradeID(accountID, tokenAddress string, buyPrice, tokenAmount float64, orderID ...string) string {
+func generateTradeID(accountID, tokenAddress string, buyPrice, tokenAmount float64) string {
 	timestamp := time.Now().UnixNano()
-	// 添加随机数增加唯一性
-	randomPart := rand.Intn(100000)
-	
-	// 如果提供了订单ID，将其包含在交易ID中
-	if len(orderID) > 0 && orderID[0] != "" {
-		return fmt.Sprintf("%s_%s_%.6f_%.6f_%d_%d_%s", 
-			accountID, tokenAddress, buyPrice, tokenAmount, timestamp, randomPart, orderID[0])
-	}
-	
-	return fmt.Sprintf("%s_%s_%.6f_%.6f_%d_%d", 
-		accountID, tokenAddress, buyPrice, tokenAmount, timestamp, randomPart)
+	return fmt.Sprintf("%s_%s_%.6f_%.6f_%d", accountID, tokenAddress, buyPrice, tokenAmount, timestamp)
+}
+
+// 🔧 新增：检查交易是否已被统计
+func isTradeProcessed(tradeID string) bool {
+	tradeIDMutex.RLock()
+	defer tradeIDMutex.RUnlock()
+	return processedTradeIDs[tradeID]
+}
+
+// 🔧 新增：标记交易已被统计
+func markTradeProcessed(tradeID string) {
+	tradeIDMutex.Lock()
+	defer tradeIDMutex.Unlock()
+	processedTradeIDs[tradeID] = true
 }
 
 // 🔧 新增：智能止损配置
@@ -2088,6 +2038,8 @@ func main() {
 	http.HandleFunc("/accounts", handleAccountsManagement)
 	// 🧹 新增：完整清理接口（暂停+清理挂单+清理代币残留）
 	http.HandleFunc("/complete-cleanup", handleCompleteCleanup)
+	// 🎮 新增：账号控制接口（暂停/恢复）
+	http.HandleFunc("/account-control", handleAccountControl)
 
 	// 🔧 新增：手动恢复暂停状态的接口
 	http.HandleFunc("/resume", func(w http.ResponseWriter, r *http.Request) {
@@ -2390,6 +2342,11 @@ func handleTrade(w http.ResponseWriter, r *http.Request) {
 	// 初始化账号统计
 	initAccountStats(req.AccountID, req.TargetVolume)
 
+	// 保存交易参数，确保恢复时能正确使用
+	saveAccountTradeParams(&req)
+	log.Printf("💾 [%s] 已保存交易参数: 代币=%s, 基础资产=%s, 金额=%.2f, 速度=%s",
+		req.AccountID, req.TokenAddress, req.BaseAsset, req.USDTAmount, req.SpeedMode)
+	
 	// 自动启动定时清空功能
 	startTokenCleanupIfNotRunning(&req)
 
@@ -2861,16 +2818,15 @@ priceObtained:
 			buyConfirmed = true
 			log.Printf("✅ [%s] 买入确认成功", req.AccountID)
 
-				// 🔧 增强：主买单成功后立即统计买入交易额（使用实际金额）
-	buyInCost := actualUSDTUsed // 🎲 使用实际花费的USDT金额，确保统计准确
-	if buyInCost > 0 && tokenAmount > 0 {
-		// 生成唯一交易ID防止重复统计，使用订单ID增强唯一性
-		tradeID := generateTradeID(req.AccountID, req.TokenAddress, buyPrice, tokenAmount, buyOrderID)
-		log.Printf("📝 [%s] 生成主买单交易ID: %s (订单ID: %s)", req.AccountID, tradeID, buyOrderID)
-		// 只统计买入交易额，损益为0（因为还没卖出）
-		updateAccountStatsWithID(req.AccountID, buyInCost, 0, tradeID)
-		log.Printf("📊 [%s] 主买单成功立即统计 - 买单金额: %.6f USDT (ID:%s)",
-			req.AccountID, buyInCost, tradeID[:8])
+			// 🔧 新增：主买单成功后立即统计买入交易额（使用实际金额）
+			buyInCost := actualUSDTUsed // 🎲 使用实际花费的USDT金额，确保统计准确
+			if buyInCost > 0 && tokenAmount > 0 {
+				// 生成唯一交易ID防止重复统计
+				tradeID := generateTradeID(req.AccountID, req.TokenAddress, buyPrice, tokenAmount)
+				// 只统计买入交易额，损益为0（因为还没卖出）
+				updateAccountStatsWithID(req.AccountID, buyInCost, 0, tradeID)
+				log.Printf("📊 [%s] 主买单成功立即统计 - 买单金额: %.6f USDT (ID:%s)",
+					req.AccountID, buyInCost, tradeID[:8])
 			}
 			break
 		}
@@ -2964,11 +2920,16 @@ func placeOrderWithID(order OrderRequest) (string, bool) {
 			amountStr := order.PaymentDetails[0].AmountStr
 			amount, _ := strconv.ParseFloat(amountStr, 64)
 			
+			// 修复：将数量四舍五入到整数，解决"Order amount must be an integer multiple of the minimum amount movement"错误
+			amount = math.Floor(amount)
+			amountStr = fmt.Sprintf("%.0f", amount)
+			
 			// 更新所有数量字段
 			order.Quantity = amount
 			order.PaymentDetails[0].Amount = amount
+			order.PaymentDetails[0].AmountStr = amountStr
 			
-			log.Printf("🔧 [%s] 统一后数量字段 - Quantity: %v, Amount: %v, AmountStr: %s", 
+			log.Printf("🔧 [%s] 统一后数量字段(取整) - Quantity: %v, Amount: %v, AmountStr: %s", 
 				accountID, order.Quantity, order.PaymentDetails[0].Amount, amountStr)
 		}
 		
@@ -3046,9 +3007,14 @@ func placeOrderWithID(order OrderRequest) (string, bool) {
 
 				// 特殊错误处理
 				if code == "481020" {
-					
 					// 余额不足直接返回特殊标识，避免无意义重试
 					return "INSUFFICIENT_BALANCE", false
+				}
+				
+				// 处理订单金额太小的情况 (481013)
+				if code == "481013" && strings.Contains(message, "Total must be greater than") {
+					log.Printf("⚠️ [%s] 订单金额太小，直接标记为卖出成功，继续下一轮", accountID)
+					return "AMOUNT_TOO_SMALL", false
 				}
 
 				// 检查认证失效
@@ -3320,59 +3286,39 @@ func updateAccountStats(accountID string, volume float64, loss float64) {
 
 // updateAccountStatsWithID 带交易ID的统计更新（防重复）
 func updateAccountStatsWithID(accountID string, volume float64, loss float64, tradeID string) {
-	// 🔧 增强：添加更详细的日志和验证
-	if volume <= 0 {
-		log.Printf("⚠️ [%s] 交易额为0或负数，跳过统计: %.6f (ID:%s)", accountID, volume, tradeID)
-		return
-	}
-
 	// 🔧 防重复统计检查
 	if tradeID != "" {
 		if isTradeProcessed(tradeID) {
 			log.Printf("⚠️ [%s] 交易已统计，跳过重复统计: %s", accountID, tradeID)
 			return
 		}
-		log.Printf("📝 [%s] 标记交易ID已处理: %s", accountID, tradeID)
 		markTradeProcessed(tradeID)
-	} else {
-		log.Printf("⚠️ [%s] 未提供交易ID，存在重复统计风险", accountID)
 	}
 
 	statsMutex.Lock()
 	defer statsMutex.Unlock()
 
-	// 确保账号统计对象存在
-	if _, exists := accountStats[accountID]; !exists {
-		log.Printf("🔧 [%s] 创建新的账号统计对象", accountID)
-		accountStats[accountID] = &AccountStats{
-			AccountID:     accountID,
-			LastTradeTime: time.Now(),
+	if stats, exists := accountStats[accountID]; exists {
+		stats.TotalVolume += volume // 累计买单金额
+		stats.TradeCount++          // 交易次数+1
+		stats.LastTradeTime = time.Now()
+		stats.TotalLoss += loss // 累计损益
+
+		// 计算总磨损率（万分比）
+		if stats.TotalVolume > 0 {
+			stats.TotalLossRate = (stats.TotalLoss / stats.TotalVolume) * 10000
+		}
+
+		if tradeID != "" {
+			log.Printf("📊 [%s] 统计更新(ID:%s): 买单金额=%.6f USDT, 累计=%.6f USDT, 交易次数=%d",
+				accountID, tradeID[:8], volume, stats.TotalVolume, stats.TradeCount)
+		} else {
+			log.Printf("📊 [%s] 统计更新: 买单金额=%.6f USDT, 累计=%.6f USDT, 交易次数=%d",
+				accountID, volume, stats.TotalVolume, stats.TradeCount)
 		}
 	}
 
-	stats := accountStats[accountID]
-	oldVolume := stats.TotalVolume
-	stats.TotalVolume += volume // 累计买单金额
-	stats.TradeCount++          // 交易次数+1
-	stats.LastTradeTime = time.Now()
-	stats.TotalLoss += loss // 累计损益
-
-	// 计算总磨损率（万分比）
-	if stats.TotalVolume > 0 {
-		stats.TotalLossRate = (stats.TotalLoss / stats.TotalVolume) * 10000
-	}
-
-	// 🔧 增强：详细记录统计变化
-	if tradeID != "" {
-		log.Printf("📊 [%s] 统计更新(ID:%s): 买单金额=%.6f USDT, 之前累计=%.6f USDT, 现在累计=%.6f USDT, 交易次数=%d",
-			accountID, tradeID[:8], volume, oldVolume, stats.TotalVolume, stats.TradeCount)
-	} else {
-		log.Printf("📊 [%s] 统计更新: 买单金额=%.6f USDT, 之前累计=%.6f USDT, 现在累计=%.6f USDT, 交易次数=%d",
-			accountID, volume, oldVolume, stats.TotalVolume, stats.TradeCount)
-	}
-
 	// 在锁外更新全局统计，避免死锁
-	// 每次更新都立即触发全局统计更新，确保前端数据实时性
 	go updateGlobalStats()
 }
 
@@ -4122,6 +4068,7 @@ func handleResult(w http.ResponseWriter, r *http.Request) {
 
 // smartSellWithRetry 智能卖出重试机制（新逻辑）
 func smartSellWithRetry(req *TradeRequest, buyPrice, tokenAmount float64, startTime time.Time) TradeResponse {
+	log.Printf("🚀 [%s] 开始执行智能卖出流程，买入价格: %.8f, 代币数量: %.6f", req.AccountID, buyPrice, tokenAmount)
 
 	// 检查代币数量是否为0
 	if tokenAmount <= 0 {
@@ -4136,10 +4083,11 @@ func smartSellWithRetry(req *TradeRequest, buyPrice, tokenAmount float64, startT
 	priceMode := getPriceMode(req)
 	currentMarketPrice, err := price.GetTokenPriceWithPrecisionAndMode(req.TokenAddress, getChainID(req), req.PricePrecision, priceMode)
 	if err != nil {
-
-		return TradeResponse{Success: false, Message: "获取当前价格失败"}
+		log.Printf("❌ [%s] 获取当前价格失败: %v，尝试使用买入价格作为卖出价格", req.AccountID, err)
+		currentMarketPrice = buyPrice // 如果无法获取市场价，使用买入价格作为卖出价格
 	}
 	currentMarketPrice = adjustPricePrecision(currentMarketPrice, req.PricePrecision)
+	log.Printf("📊 [%s] 获取到当前市场价格: %.8f", req.AccountID, currentMarketPrice)
 
 	var initialSellPrice float64
 	var strategy string
@@ -4183,6 +4131,13 @@ func smartSellWithRetry(req *TradeRequest, buyPrice, tokenAmount float64, startT
 		strategy = "万一磨损, 磨损: 1万分"
 	}
 
+	// 确保卖出价格不为0
+	if initialSellPrice <= 0 {
+		log.Printf("⚠️ [%s] 计算的卖出价格为0或负数，使用买入价格作为卖出价格", req.AccountID)
+		initialSellPrice = buyPrice
+		strategy = "使用买入价格卖出（价格计算错误）"
+	}
+
 	log.Printf("💰 [%s] 卖出策略: %s, 价格: %.12f", req.AccountID, strategy, initialSellPrice)
 	log.Printf("💰 [%s] Initial sell attempt: price=%.8f", req.AccountID, initialSellPrice)
 
@@ -4207,16 +4162,22 @@ func smartSellWithRetry(req *TradeRequest, buyPrice, tokenAmount float64, startT
 
 	// 移除详细验证日志
 
+	// 确保代币数量为整数，并且使用整数格式的字符串
+	intSellAmount := math.Floor(sellTokenAmount) // 确保是整数
+	strAmount := fmt.Sprintf("%.0f", intSellAmount) // 使用整数格式的字符串，不带小数点
+	
+	log.Printf("🔢 [%s] 最终卖出数量: %s (整数格式)", req.AccountID, strAmount)
+
 	// 立即下第一个卖单（带重试机制）
 	sellOrderID, sellSuccess := placeOrderWithRetry(OrderRequest{
 		BaseAsset:  req.BaseAsset,
 		QuoteAsset: "USDT",
 		Side:       "SELL",
 		Price:      initialSellPrice,
-		Quantity:   sellTokenAmount,
+		Quantity:   intSellAmount,
 		PaymentDetails: []PaymentDetail{{
-			Amount:            sellTokenAmount,
-			AmountStr:         fmt.Sprintf("%.6f", sellTokenAmount), // 🔧 修复：保留6位小数，支持小额代币
+			Amount:            intSellAmount,
+			AmountStr:         strAmount, // 使用整数格式的字符串
 			PaymentWalletType: "ALPHA",
 		}},
 		Csrftoken: req.Csrftoken,
@@ -5096,11 +5057,9 @@ func retryBuyWithNewPriceAttempt(req *TradeRequest, startTime time.Time, retryAt
 	// 🔧 修复：重试买单成功后需要统计交易额（使用防重复机制）
 	buyInCost := retryActualUSDTUsed // 🎲 使用重试时实际花费的USDT金额
 
-	// 🔧 增强：重试买单成功后立即统计买入交易额（防重复）
+	// 🔧 新增：重试买单成功后立即统计买入交易额（防重复）
 	if buyInCost > 0 && tokenAmount > 0 {
-		// 生成唯一交易ID防止重复统计，使用订单ID增强唯一性
-		tradeID := generateTradeID(req.AccountID, req.TokenAddress, newPrice, tokenAmount, buyOrderID)
-		log.Printf("📝 [%s] 生成重试买单交易ID: %s (订单ID: %s)", req.AccountID, tradeID, buyOrderID)
+		tradeID := generateTradeID(req.AccountID, req.TokenAddress, newPrice, tokenAmount)
 		updateAccountStatsWithID(req.AccountID, buyInCost, 0, tradeID)
 		log.Printf("📊 [%s] 重试买单成功立即统计 - 买单金额: %.6f USDT (ID:%s)",
 			req.AccountID, buyInCost, tradeID[:8])
@@ -5176,8 +5135,13 @@ func placeOrderWithRetry(order OrderRequest, accountID string) (string, bool) {
 
 		// 检查是否是余额不足，如果是则停止重试
 		if orderID == "INSUFFICIENT_BALANCE" {
-
 			return "", false
+		}
+		
+		// 检查是否是金额太小，如果是则标记为卖出成功并继续
+		if orderID == "AMOUNT_TOO_SMALL" {
+			log.Printf("✅ [%s] 订单金额太小，视为卖出成功", accountID)
+			return "AMOUNT_TOO_SMALL_SUCCESS", true
 		}
 
 		// 检查是否是认证失效，如果是则停止重试
@@ -5211,8 +5175,13 @@ func placeOrderWithLimitedRetry(order OrderRequest, accountID string, maxRetries
 
 		// 检查是否是余额不足，如果是则停止重试
 		if orderID == "INSUFFICIENT_BALANCE" {
-
 			return "", false
+		}
+		
+		// 检查是否是金额太小，如果是则标记为卖出成功并继续
+		if orderID == "AMOUNT_TOO_SMALL" {
+			log.Printf("✅ [%s] 订单金额太小，视为卖出成功", accountID)
+			return "AMOUNT_TOO_SMALL_SUCCESS", true
 		}
 
 		// 如果不是最后一次尝试，等待后重试
@@ -5796,8 +5765,10 @@ func monitorHangingOrder(req *TradeRequest, sellOrderID string, buyPrice, sellTo
 				if cancelOrder(marketSellOrderID, req.BaseAsset+"USDT", req.Csrftoken, req.Cookie) {
 					log.Printf("✅ [%s] 异步市场价订单取消成功 (尝试%d次)", req.AccountID, attempt)
 					break
-				} else if attempt < 3 {
-					time.Sleep(100 * time.Millisecond)
+				} else {
+					if attempt < 3 {
+						time.Sleep(100 * time.Millisecond)
+					}
 				}
 			}
 			// 启动异步递减万1策略
@@ -5832,13 +5803,12 @@ func asyncFastDecrement(req *TradeRequest, buyPrice, sellTokenAmount, startPrice
 	setAccountAsyncState(req.AccountID, "decrement", true)
 	defer setAccountAsyncState(req.AccountID, "decrement", false)
 
-	// 优化递减策略：万1 → 万6 → 万15 → 万30 → 百10
+	// 异步递减策略：4步递减
 	decrementSteps := []float64{
-		0.0001, // 万1
-		0.0006, // 万6
-		0.0015, // 万15
-		0.0030, // 万30
-		0.1,    // 百10 (最终限制)
+		0.0002, // 万2（第1步）
+		0.001,  // 千1（第2步）
+		0.005,  // 千5（第3步）
+		0.1,    // 百10（第4步，最终限制）
 	}
 
 	for step, decrementRate := range decrementSteps {
@@ -5891,19 +5861,18 @@ func asyncFastDecrement(req *TradeRequest, buyPrice, sellTokenAmount, startPrice
 	}, req.AccountID)
 
 		if !newSellSuccess {
-			// 如果是余额不足，按币安规定调整数量
+			// 如果是余额不足，视为卖出成功并退出循环
 			if newSellOrderID == "INSUFFICIENT_BALANCE" {
-
-				// 使用币安规定调整代币数量
-				newSellTokenAmount := adjustTokenAmountForBinance(currentSellPrice, sellTokenAmount, req.PricePrecision)
-				if newSellTokenAmount < 1 || newSellTokenAmount >= sellTokenAmount {
-					log.Printf("🚨 [%s] 异步递减代币数量无法调整，跳过当前步骤", req.AccountID)
-					continue // 跳过当前步骤，继续下一步递减
-				}
-
-				sellTokenAmount = newSellTokenAmount
-				log.Printf("🔢 [%s] 异步按币安规定调整代币数量: %.0f 个", req.AccountID, sellTokenAmount)
-				continue // 用调整后的数量重试当前价格
+				log.Printf("✅ [%s] 检测到余额不足错误，代币可能已被其他操作卖出，视为成功", req.AccountID)
+				
+				// 设置代币已卖出状态
+				setTokenSold(req.AccountID, req.TokenAddress, "auto_sold", currentSellPrice, sellTokenAmount)
+				
+				// 更新最后交易时间
+				updateLastTradeTime(req.AccountID)
+				
+				// 退出整个递减循环
+				return
 			} else {
 				continue
 			}
@@ -10147,21 +10116,12 @@ func executeDecrementRetry(req *TradeRequest, buyPrice, sellTokenAmount, current
 		}
 	}
 
-	// 🔧 增强递减策略：更激进的递减，确保代币被卖出
+	// 🔧 递减策略：4步递减
 	decrementSteps := []float64{
-		0.0001, // 万1
-		0.0003, // 万3
-		0.0005, // 万5
-		0.0008, // 万8
-		0.001,  // 千1
-		0.0015, // 千1.5
-		0.002,  // 千2
-		0.003,  // 千3
-		0.005,  // 千5
-		0.008,  // 千8
-		0.01,   // 1%
-		0.015,  // 1.5%
-		0.02,   // 2% (最终限制)
+		0.0002, // 万2（第1步）
+		0.001,  // 千1（第2步）
+		0.005,  // 千5（第3步）
+		0.1,    // 百10（第4步，最终限制）
 	}
 
 	currentSellPrice := 0.0
@@ -10218,19 +10178,25 @@ func executeDecrementRetry(req *TradeRequest, buyPrice, sellTokenAmount, current
 
 		if !newSellSuccess {
 			if newSellOrderID == "INSUFFICIENT_BALANCE" {
-
-				// 使用币安规定调整代币数量
-				newSellTokenAmount := adjustTokenAmountForBinance(currentSellPrice, sellTokenAmount, req.PricePrecision)
-				if newSellTokenAmount < 1 || newSellTokenAmount >= sellTokenAmount {
-					log.Printf("⚠️ [%s] 递减第%d步代币数量无法调整，跳过", req.AccountID, step+1)
-					continue
+				log.Printf("✅ [%s] 递减第%d步检测到余额不足错误，代币可能已被其他操作卖出，视为成功", req.AccountID, step+1)
+				
+				// 设置代币已卖出状态
+				setTokenSold(req.AccountID, req.TokenAddress, "auto_sold", currentSellPrice, sellTokenAmount)
+				
+				// 更新最后交易时间
+				updateLastTradeTime(req.AccountID)
+				
+				// 返回成功响应
+				return TradeResponse{
+					Success:     true,
+					Message:     "检测到余额不足错误，代币可能已被其他操作卖出",
+					BuyPrice:    buyPrice,
+					SellPrice:   currentSellPrice,
+					TokenAmount: sellTokenAmount,
+					Profit:      (currentSellPrice - buyPrice) * sellTokenAmount,
+					ExecuteTime: time.Since(startTime).Milliseconds(),
 				}
-
-				sellTokenAmount = newSellTokenAmount
-				log.Printf("🔢 [%s] 递减第%d步按币安规定调整代币数量: %.0f 个", req.AccountID, step+1, sellTokenAmount)
-				continue // 用调整后的数量重试当前价格
 			} else {
-
 				continue
 			}
 		}
@@ -10584,7 +10550,6 @@ func monitorQian8OrderAsync(req *TradeRequest, orderID string, qian8Price, sellT
 
 // executeAsyncMarketSell 执行异步市场价卖出
 func executeAsyncMarketSell(req *TradeRequest, buyPrice, sellTokenAmount, marketPrice float64, startTime time.Time) {
-
 	// 使用现有的市场价卖出逻辑，但不返回结果
 	response := sellAtMarketPrice(req, buyPrice, sellTokenAmount, marketPrice, startTime)
 

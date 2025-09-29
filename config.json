@@ -1,38 +1,18 @@
 {
-  "server": {
-    "port": 28080,
-    "host": "0.0.0.0",
-    "mode": "master",
-    "node_id": "",
-    "master_addr": ""
-  },
-  "redis": {
-    "addr": "localhost:6379",
-    "password": "",
-    "db": 0
-  },
-  "grpc": {
-    "port": 29090,
-    "max_recv_msg_size": 4194304,
-    "max_send_msg_size": 4194304,
-    "connection_timeout": 10,
-    "keepalive_time": 30,
-    "keepalive_timeout": 5
-  },
-  "binance": {
-    "base_url": "https://www.binance.com",
-    "ws_url": "wss://nbstream.binance.com/w3w/wsa/stream",
-    "request_timeout": 10,
-    "max_retries": 3,
-    "retry_delay": 1000,
-    "price_cache_time": 5
-  },
-  "log": {
-    "level": "info",
-    "format": "text",
-    "output": "stdout",
-    "max_size": 100,
-    "max_backups": 3,
-    "max_age": 7
-  }
+  "servers": [
+    {
+      "id": "slave-e08272f7",
+      "name": "乔松羽",
+      "ip": "43.134.57.189",
+      "csrftoken": "be6e64277a916f3368e97ce71e085c1c",
+      "cookie": "bnc-uuid=e4aae9c2-54d3-4dae-a0a8-cc11c5a1deeb; BNC_FV_KEY=33abb6e63c53addbb7630a04a76572ffe18c6cc1"
+    },
+    {
+      "id": "slave-ceaf6ddd",
+      "name": "范冬华",
+      "ip": "43.156.61.167",
+      "csrftoken": "610fcabae9519cb2a9947a77bd4d48b8",
+      "cookie": "bnc-uuid=f7b3aebe-b596-41f7-bfb2-f33ce239432b; BNC_FV_KEY=334a57b08964a5259636a255396ac26f698123b1"
+    }
+  ]
 }
