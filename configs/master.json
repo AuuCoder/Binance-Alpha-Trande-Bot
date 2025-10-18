@@ -7,7 +7,7 @@
     "master_addr": ""
   },
   "redis": {
-    "addr": "43.156.131.41:6379",
+    "addr": "[master ip]:6379",
     "password": "",
     "db": 0
   },
@@ -28,7 +28,7 @@
     "price_cache_time": 5
   },
   "mongodb": {
-    "uri": "mongodb+srv://yuucoder:yuucoder0208..@bn-alpha.vamde.mongodb.net/?retryWrites=true&w=majority&appName=bn-alpha",
+    "uri": "[mongodb uri]",
     "database": "alpha",
     "enabled": true,
     "max_pool_size": 20,
