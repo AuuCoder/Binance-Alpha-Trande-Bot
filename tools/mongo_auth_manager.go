@@ -16,7 +16,7 @@ import (
 )
 
 // 默认MongoDB连接URI
-const defaultMongoURI = "mongodb+srv://yuucoder:yuucoder0208..@bn-alpha.vamde.mongodb.net/?retryWrites=true&w=majority&appName=bn-alpha"
+const defaultMongoURI = ""
 
 // 节点信息结构
 type NodeInfo struct {

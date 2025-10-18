@@ -17,7 +17,7 @@ import (
 
 const (
 	// MongoDB连接URI
-	defaultMongoURI = "mongodb+srv://auucoder:muyuai0208..@alpha.mpn1slf.mongodb.net/?retryWrites=true&w=majority&appName=alpha"
+	defaultMongoURI = ""
 	// 数据库名称
 	dbName = "alpha"
 	// 节点集合名称

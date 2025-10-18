@@ -19,7 +19,7 @@ import (
 )
 
 // MongoDB连接URI
-var mongoURI = "mongodb+srv://yuucoder:yuucoder0208..@bn-alpha.vamde.mongodb.net/?retryWrites=true&w=majority&appName=bn-alpha"
+var mongoURI = ""
 
 // 使用MongoDB连接管理器获取连接
 func getMongoClient() (*mongo.Client, func(), error) {

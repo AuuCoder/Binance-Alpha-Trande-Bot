@@ -92,6 +92,10 @@ func NewPriceClient() *PriceClient {
 	return &PriceClient{
 		// 🔧 修正：使用正确的WebSocket URL
 		wsURL:       "wss://nbstream.binance.com/w3w/wsa/stream",
+		// 添加备用WebSocket地址
+		backupURLs:  []string{
+
+		},
 		subscribers: make(map[string][]chan float64),
 		stopChan:    make(chan struct{}),
 		priceCache:  make(map[string]float64),
@@ -100,9 +104,9 @@ func NewPriceClient() *PriceClient {
 		// 🚀 新增：持久订阅管理
 		persistentSubscriptions: make(map[string]bool),
 
-			// 🚀 新增：智能缓存配置
-	cacheMaxAge:       180 * time.Second, // 正常缓存3分钟，极大减少请求频率
-	emergencyCacheAge: 30 * time.Minute,  // 紧急情况缓存30分钟
+		// 🚀 新增：智能缓存配置
+		cacheMaxAge:       180 * time.Second, // 正常缓存3分钟，极大减少请求频率
+		emergencyCacheAge: 30 * time.Minute,  // 紧急情况缓存30分钟
 
 		// 🔧 重连配置
 		maxReconnectAttempts: 5, // 减少重连次数
@@ -111,35 +115,104 @@ func NewPriceClient() *PriceClient {
 		networkCheckHosts: []string{
 			"8.8.8.8:53", // Google DNS
 			"1.1.1.1:53", // Cloudflare DNS
+			"114.114.114.114:53", // 国内114 DNS
 		},
 	}
 }
 
 // Connect 连接WebSocket
 func (pc *PriceClient) Connect() error {
+	// 防止并发连接尝试
+	pc.writeMu.Lock()
+	defer pc.writeMu.Unlock()
+	
+	// 检查是否已经连接
+	pc.mu.RLock()
+	isAlreadyRunning := pc.isRunning && pc.conn != nil
+	pc.mu.RUnlock()
+	
+	if isAlreadyRunning {
+		log.Printf("ℹ️ WebSocket已连接，跳过重复连接")
+		return nil
+	}
+
 	// 🔧 新增：连接前检查网络
 	if !pc.checkNetworkConnectivity() {
-		return fmt.Errorf("network connectivity check failed")
+		log.Printf("❌ 网络连接检查失败，等待5秒后重试")
+		time.Sleep(5 * time.Second)
+		if !pc.checkNetworkConnectivity() {
+			return fmt.Errorf("network connectivity check failed")
+		}
 	}
 
 	// 🚨 新增：启动健康检查协程
 	go pc.startHealthCheck()
 
-	// 🚀 最快连接参数：优化所有超时时间
-	dialer := websocket.DefaultDialer
-	dialer.HandshakeTimeout = 5 * time.Second // 快速握手：5秒
-	dialer.ReadBufferSize = 16384             // 增大读缓冲区：16KB
-	dialer.WriteBufferSize = 16384            // 增大写缓冲区：16KB
-	dialer.EnableCompression = true           // 启用压缩
-
-	// 设置请求头，模拟浏览器行为
-	headers := make(map[string][]string)
-	headers["User-Agent"] = []string{"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-	headers["Origin"] = []string{"https://www.binance.com"}
-
-	conn, _, err := dialer.Dial(pc.wsURL, headers)
-	if err != nil {
-		return fmt.Errorf("failed to connect to WebSocket: %v", err)
+	// 尝试连接主URL和备用URL
+	var conn *websocket.Conn
+	var err error
+	
+	// 构建URL列表，包括主URL和备用URL
+	urls := []string{pc.wsURL}
+	urls = append(urls, pc.backupURLs...)
+	
+	// 尝试所有URL
+	for _, url := range urls {
+		log.Printf("🔄 尝试连接到WebSocket: %s", url)
+		
+		// 🚀 最快连接参数：优化所有超时时间
+		dialer := websocket.DefaultDialer
+		dialer.HandshakeTimeout = 10 * time.Second // 增加握手超时：10秒
+		dialer.ReadBufferSize = 16384             // 增大读缓冲区：16KB
+		dialer.WriteBufferSize = 16384            // 增大写缓冲区：16KB
+		dialer.EnableCompression = true           // 启用压缩
+		
+		// 设置请求头，模拟浏览器行为
+		headers := make(map[string][]string)
+		headers["User-Agent"] = []string{"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+		headers["Origin"] = []string{"https://www.binance.com"}
+		
+		// 使用更可靠的连接方式
+		connChan := make(chan *websocket.Conn, 1)
+		errChan := make(chan error, 1)
+		
+		// 在goroutine中尝试连接，避免阻塞
+		go func() {
+			c, resp, e := dialer.Dial(url, headers)
+			if e != nil {
+				if resp != nil {
+					log.Printf("❌ 连接失败，HTTP状态: %d", resp.StatusCode)
+				}
+				errChan <- e
+				return
+			}
+			connChan <- c
+		}()
+		
+		// 等待连接结果或超时
+		select {
+		case conn = <-connChan:
+			log.Printf("✅ 成功连接到: %s", url)
+			err = nil
+			break
+		case err = <-errChan:
+			log.Printf("❌ 连接失败: %v", err)
+			continue
+		case <-time.After(15 * time.Second):
+			log.Printf("❌ 连接超时")
+			err = fmt.Errorf("connection timeout")
+			continue
+		}
+		
+		// 如果连接成功，跳出循环
+		if conn != nil {
+			break
+		}
+	}
+	
+	// 如果所有URL都连接失败
+	if conn == nil {
+		return fmt.Errorf("failed to connect to all WebSocket URLs: %v", err)
 	}
 
 	// 🔧 币安官方要求：设置合理的超时时间
@@ -155,11 +228,11 @@ func (pc *PriceClient) Connect() error {
 		// 🔧 使用安全写入方法防止并发写入
 		err := pc.safeWriteMessage(websocket.PongMessage, []byte(appData))
 		if err != nil {
+			log.Printf("❌ PONG回复失败: %v", err)
 			return err
 		}
 		// 重置读超时
 		conn.SetReadDeadline(time.Now().Add(70 * time.Second))
-
 		return nil
 	})
 
@@ -170,7 +243,6 @@ func (pc *PriceClient) Connect() error {
 	})
 
 	// 🔧 获取写入锁，确保连接设置的原子性
-	pc.writeMu.Lock()
 	pc.mu.Lock()
 	pc.conn = conn
 	pc.isRunning = true
@@ -178,10 +250,12 @@ func (pc *PriceClient) Connect() error {
 	pc.reconnectAttempts = 0 // 重置重连次数
 	pc.isReconnecting = false
 	pc.mu.Unlock()
-	pc.writeMu.Unlock()
 
+	// 启动读取循环
 	go pc.readLoop()
-	// 移除复杂的连接监控，让WebSocket自然处理连接状态
+	
+	// 如果有持久订阅，重新订阅
+	go pc.resubscribeAll()
 
 	return nil
 }
@@ -554,10 +628,33 @@ func (pc *PriceClient) sendSubscription(param string) error {
 func (pc *PriceClient) safeWriteMessage(messageType int, data []byte) error {
 	// 🔧 对于 PONG 消息，使用超时机制避免长时间阻塞
 	done := make(chan error, 1)
-
+	cancelled := make(chan struct{})
+	
+	// 使用独立的goroutine进行写入操作
 	go func() {
+		defer func() {
+			// 捕获可能的panic
+			if r := recover(); r != nil {
+				select {
+				case <-cancelled:
+					// 已取消，忽略
+				default:
+					log.Printf("⚠️ WebSocket写入操作panic: %v", r)
+					done <- fmt.Errorf("write operation panic: %v", r)
+				}
+			}
+		}()
+		
 		pc.writeMu.Lock()
 		defer pc.writeMu.Unlock()
+		
+		select {
+		case <-cancelled:
+			// 操作已被取消
+			return
+		default:
+			// 继续执行
+		}
 
 		pc.mu.RLock()
 		conn := pc.conn
@@ -568,16 +665,35 @@ func (pc *PriceClient) safeWriteMessage(messageType int, data []byte) error {
 			done <- fmt.Errorf("connection is not available")
 			return
 		}
-
-		done <- conn.WriteMessage(messageType, data)
+		
+		// 设置写入超时
+		conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+		
+		// 执行写入操作
+		err := conn.WriteMessage(messageType, data)
+		
+		// 重置写入超时
+		if err == nil {
+			conn.SetWriteDeadline(time.Time{}) // 清除写入超时
+		}
+		
+		select {
+		case <-cancelled:
+			// 操作已被取消，但写入可能已完成
+			return
+		default:
+			done <- err
+		}
 	}()
 
 	// 等待写入完成或超时
 	select {
 	case err := <-done:
 		return err
-	case <-time.After(2 * time.Second):
-		return fmt.Errorf("write operation timeout")
+	case <-time.After(3 * time.Second): // 增加超时时间到3秒
+		// 通知写入goroutine取消操作
+		close(cancelled)
+		return fmt.Errorf("write operation timeout after 3 seconds")
 	}
 }
 
@@ -585,14 +701,36 @@ func (pc *PriceClient) safeWriteMessage(messageType int, data []byte) error {
 func (pc *PriceClient) readLoop() {
 	log.Printf("🔄 启动WebSocket读取循环")
 	defer func() {
+		// 捕获可能的panic
+		if r := recover(); r != nil {
+			log.Printf("⚠️ WebSocket读取循环发生panic: %v", r)
+		}
+		
 		pc.mu.Lock()
+		wasRunning := pc.isRunning
 		pc.isRunning = false
 		pc.mu.Unlock()
+		
 		log.Printf("🛑 WebSocket读取循环结束")
+		
+		// 只有在之前是运行状态时才尝试重连
+		if wasRunning {
+			// 使用goroutine避免阻塞
+			go pc.handleReconnect()
+		}
 	}()
 
 	// 添加连接状态日志
-	log.Printf("📊 当前连接状态: isRunning=%v, 持久订阅数=%d", pc.isRunning, len(pc.persistentSubscriptions))
+	pc.subscriptionMutex.RLock()
+	subCount := len(pc.persistentSubscriptions)
+	pc.subscriptionMutex.RUnlock()
+	
+	log.Printf("📊 当前连接状态: isRunning=%v, 持久订阅数=%d", pc.isRunning, subCount)
+
+	// 设置最大连续错误次数
+	maxConsecutiveErrors := 3
+	consecutiveErrors := 0
+	lastSuccessfulRead := time.Now()
 
 	for {
 		pc.mu.RLock()
@@ -611,23 +749,30 @@ func (pc *PriceClient) readLoop() {
 		// 读取消息
 		_, message, err := conn.ReadMessage()
 		if err != nil {
+			consecutiveErrors++
+			
 			if websocket.IsUnexpectedCloseError(err) {
 				log.Printf("❌ WebSocket意外关闭: %v", err)
-			} else if !strings.Contains(err.Error(), "use of closed network connection") {
+			} else if strings.Contains(err.Error(), "use of closed network connection") {
+				log.Printf("ℹ️ WebSocket连接已关闭")
+			} else {
 				log.Printf("❌ WebSocket读取错误: %v", err)
 			}
 
-			// 检查是否应该尝试重新连接
-			pc.mu.RLock()
-			reconnecting := pc.isReconnecting
-			pc.mu.RUnlock()
-
-			if !reconnecting {
-				// 避免重复重连
-				go pc.handleReconnect()
+			// 如果连续错误达到阈值或超过30秒没有成功读取，触发重连
+			if consecutiveErrors >= maxConsecutiveErrors || time.Since(lastSuccessfulRead) > 30*time.Second {
+				log.Printf("⚠️ 连续错误次数(%d)达到阈值或读取超时，准备重连", consecutiveErrors)
+				return // 触发defer中的重连
 			}
-			return
+			
+			// 短暂等待后继续尝试读取
+			time.Sleep(1 * time.Second)
+			continue
 		}
+
+		// 成功读取消息，重置错误计数
+		consecutiveErrors = 0
+		lastSuccessfulRead = time.Now()
 
 		// 处理消息
 		pc.handleMessage(message)
@@ -648,6 +793,18 @@ func (pc *PriceClient) handleReconnect() {
 	
 	// 设置重连标志
 	pc.isReconnecting = true
+	
+	// 检查是否超过最大重试次数
+	if pc.reconnectAttempts >= pc.maxReconnectAttempts {
+		log.Printf("❌ 达到最大重连次数 (%d)，停止重连", pc.maxReconnectAttempts)
+		// 重置重连状态，允许将来再次尝试重连
+		log.Printf("⏱️ 等待30秒后重置重连计数")
+		pc.reconnectAttempts = 0
+		time.Sleep(30 * time.Second) // 等待30秒后再允许新的重连尝试
+		pc.isReconnecting = false
+		pc.mu.Unlock()
+		return
+	}
 	pc.mu.Unlock()
 	
 	// 重连完成后，无论成功与否，都要重置重连标志
@@ -660,14 +817,8 @@ func (pc *PriceClient) handleReconnect() {
 	// 记录重连开始
 	log.Printf("🔄 开始重连 (尝试 %d/%d)", pc.reconnectAttempts+1, pc.maxReconnectAttempts)
 	
-	// 检查是否超过最大重试次数
-	if pc.reconnectAttempts >= pc.maxReconnectAttempts {
-		log.Printf("❌ 达到最大重连次数 (%d)，停止重连", pc.maxReconnectAttempts)
-		return
-	}
-	
 	// 计算重连延迟（指数退避）
-	delay := pc.reconnectDelay * time.Duration(math.Pow(2, float64(pc.reconnectAttempts)))
+	delay := pc.reconnectDelay * time.Duration(math.Pow(1.5, float64(pc.reconnectAttempts)))
 	if delay > pc.maxReconnectDelay {
 		delay = pc.maxReconnectDelay
 	}
@@ -682,6 +833,7 @@ func (pc *PriceClient) handleReconnect() {
 	// 断开旧连接
 	pc.mu.Lock()
 	if pc.conn != nil {
+		log.Printf("🔌 关闭旧连接")
 		pc.conn.Close()
 		pc.conn = nil
 	}
@@ -690,15 +842,21 @@ func (pc *PriceClient) handleReconnect() {
 	pc.mu.Unlock()
 	
 	// 尝试重新连接
+	log.Printf("🔄 执行第%d次重连", pc.reconnectAttempts)
 	err := pc.Connect()
 	if err != nil {
 		log.Printf("❌ 重连失败: %v", err)
 		
+		// 如果连接失败，等待更长时间再尝试
+		time.Sleep(5 * time.Second)
+		
 		// 如果还有重试次数，递归调用自己
 		if pc.reconnectAttempts < pc.maxReconnectAttempts {
+			log.Printf("🔄 安排下一次重连尝试")
 			go pc.handleReconnect()
 		} else {
-			log.Printf("❌ 所有重连尝试均失败，放弃重连")
+			log.Printf("❌ 所有重连尝试均失败，将在30秒后重置重连计数")
+			// 在这里不重置重连计数，让上面的检查处理
 		}
 		return
 	}
@@ -1292,9 +1450,14 @@ func (pc *PriceClient) startHealthCheck() {
 
 	log.Printf("🏥 启动WebSocket健康检查，每30秒检查一次")
 
+	// 启动时先记录一次状态
+	pc.logConnectionStats()
+
 	for {
 		select {
 		case <-ticker.C:
+			// 每次健康检查时记录连接状态
+			pc.logConnectionStats()
 			pc.performHealthCheck()
 		case <-pc.stopChan:
 			log.Printf("🏥 健康检查已停止")
@@ -1314,7 +1477,7 @@ func (pc *PriceClient) performHealthCheck() {
 
 	// 检查连接状态
 	if !isRunning && !isReconnecting {
-
+		log.Printf("🏥 健康检查: 连接已断开且未在重连中，触发重连")
 		go pc.handleReconnect()
 		return
 	}
@@ -1323,7 +1486,7 @@ func (pc *PriceClient) performHealthCheck() {
 	if isRunning && conn != nil {
 		timeSinceConnect := time.Since(lastConnectTime)
 		if timeSinceConnect > 25*time.Hour { // 超过25小时强制重连
-
+			log.Printf("🏥 健康检查: 连接时间超过25小时，触发重连")
 			go pc.handleReconnect()
 			return
 		}
@@ -1341,12 +1504,18 @@ func (pc *PriceClient) performHealthCheck() {
 		pc.mu.RUnlock()
 
 		if !hasRecentData && timeSinceConnect > 2*time.Minute {
-
+			log.Printf("🏥 健康检查: 超过2分钟无数据更新，触发重连")
 			go pc.handleReconnect()
 			return
 		}
+		
+		// 连接正常，记录心跳
+		if hasRecentData {
+			log.Printf("💓 WebSocket连接正常，最近5分钟有数据更新")
+		} else {
+			log.Printf("⚠️ WebSocket连接可能异常，最近5分钟无数据更新")
+		}
 	}
-
 }
 
 // 🚨 新增：强制重置连接状态（紧急恢复）
@@ -1574,4 +1743,30 @@ func (pc *PriceClient) updateSubscriptionPrice(contractAddress, chainID string, 
 			}
 		}
 	}
+}
+
+// 添加日志记录函数
+func (pc *PriceClient) logConnectionStats() {
+	pc.mu.RLock()
+	defer pc.mu.RUnlock()
+	
+	pc.subscriptionMutex.RLock()
+	subCount := len(pc.persistentSubscriptions)
+	pc.subscriptionMutex.RUnlock()
+	
+	// 连接状态日志
+	log.Printf("📊 WebSocket连接状态: isRunning=%v, isReconnecting=%v, 重连次数=%d/%d, 持久订阅数=%d",
+		pc.isRunning, pc.isReconnecting, pc.reconnectAttempts, pc.maxReconnectAttempts, subCount)
+	
+	// 缓存状态
+	cacheCount := len(pc.priceCache)
+	var recentCacheCount int
+	now := time.Now()
+	for _, t := range pc.cacheTime {
+		if now.Sub(t) < 5*time.Minute {
+			recentCacheCount++
+		}
+	}
+	
+	log.Printf("📊 价格缓存状态: 总缓存数=%d, 5分钟内活跃缓存=%d", cacheCount, recentCacheCount)
 }

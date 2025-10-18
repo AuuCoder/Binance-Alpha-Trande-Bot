@@ -2,6 +2,107 @@
 
 An efficient and intelligent automated cryptocurrency trading bot, specifically designed for fast trading and risk management.
 
+### 🚀 Quick Start
+
+#### 📦 Compilation & Deployment
+
+This project adopts a three-tier architecture with separate master, slave, and web components. The web interface consists of static HTML files.
+
+##### Requirements
+
+- Go 1.21 or higher
+- Redis server (for data storage and communication)
+- Network environment (with access to Binance API)
+
+##### Compilation Steps
+
+**1. Clone the Project**
+
+```bash
+git clone <repository-url>
+cd alpha-autosell-bot
+```
+
+**2. Compile Master (Flash Trade Master)**
+
+```bash
+# Compile master to build directory
+go build -o build/flash-trade-master ./cmd/master
+
+# Or run directly
+go run ./cmd/master
+```
+
+The master will start on port **8080**, providing core trading engine and API services.
+
+**3. Compile Slave (Alpha AutoSell Slave)**
+
+```bash
+# Compile slave to build directory
+go build -o build/alpha-autosell-slave ./cmd/slave
+
+# Or run directly
+go run ./cmd/slave
+```
+
+The slave will start on port **28081**, providing account management and auto-loop trading functionality.
+
+**4. Deploy Web Interface**
+
+The web interface consists of static HTML files and requires no compilation:
+
+```bash
+ Open directly in browser
+ Open the web/index.html file
+```
+
+**5. Configuration Files**
+
+Before starting, configure the necessary configuration files:
+
+- `configs/master.json` - Master configuration
+- `configs/slave.json` - Slave configuration
+- `config.json` - Redis and other basic configurations
+
+##### Startup Order
+
+1. **Start Redis service** (if not already running)
+2. **Start Master**: `./build/flash-trade-master`
+3. **Start Slave**: `./build/alpha-autosell-slave`
+4. **Access Web Interface**: Open the deployed web address in a browser
+
+##### Verify Deployment
+
+- Master: Visit `http://localhost:8080/health` to check health status
+- Slave: Visit `http://localhost:28081/health` to check health status
+- Web Interface: Open the web page to view the control panel
+
+##### Common Issues
+
+**Q: Cannot find package during compilation?**
+
+```bash
+# Download dependencies first
+go mod download
+go mod tidy
+```
+
+**Q: Port already in use error on startup?**
+
+```bash
+# Modify port number in configuration file, or close the program occupying the port
+lsof -i :8080
+lsof -i :28081
+```
+
+**Q: Cannot connect to Redis?**
+
+```bash
+# Check if Redis service is running
+redis-cli ping
+# Check if Redis configuration in config.json is correct
+```
+
 ### 🚀 Core Features
 
 #### 🔥 Flash Trade Core Engine
@@ -109,7 +210,7 @@ This system adopts a separated architecture of master control, slave control, an
 ┌─────────────────────┐    ┌──────────────────────┐    ┌──────────────────────┐
 │     🖥️ Master       │    │     🤖 Slave         │    │     🌐 Web           │
 │   Flash Trade       │◄──►│  Alpha AutoSell      │◄──►│   Web Dashboard      │
-│   (Port 8080)       │    │   (Port 8081)        │    │   (Static Pages)     │
+│   (Port 8080)       │    │   (Port 28081)       │    │   (Static Pages)     │
 │                     │    │                     │    │                     │
 │ • Core Trading      │    │ • Account           │    │ • Monitoring        │
 │ • Strategy          │    │ • Auto Loop         │    │ • Configuration     │
@@ -146,7 +247,7 @@ This system adopts a separated architecture of master control, slave control, an
 
 #### 🤖 Slave (Alpha AutoSell)
 
-**Account Management System - Port 8081**
+**Account Management System - Port 28081**
 
 ##### Main Functions
 
@@ -289,4 +390,4 @@ This project is licensed under the MIT License.
 
 ---
 
-_Last Updated: September 26, 2025_
+_Last Updated: October 18, 2025_
