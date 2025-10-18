@@ -4,15 +4,15 @@
     "host": "127.0.0.1",
     "mode": "slave",
     "node_id": "",
-    "master_addr": "103.151.217.203:29090"
+    "master_addr": "[master ip]:29090"
   },
   "redis": {
-    "addr": "103.151.217.203:6379",
+    "addr": "[master ip]:6379",
     "password": "",
     "db": 0
   },
   "mongodb": {
-    "uri": "mongodb+srv://yuucoder:yuucoder0208..@bn-alpha.vamde.mongodb.net/?retryWrites=true&w=majority&appName=bn-alpha",
+    "uri": "[mongodb uri]",
     "database": "alpha",
     "enabled": true,
     "max_pool_size": 20,
